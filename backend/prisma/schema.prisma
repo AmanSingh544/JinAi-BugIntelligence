@@ -1,0 +1,203 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  extensions = [pgvector(map: "vector")]
+}
+
+model User {
+  id            String    @id @default(uuid()) @db.Uuid
+  email         String    @unique
+  password_hash String
+  created_at    DateTime  @default(now()) @db.Timestamptz
+
+  projects      Project[]
+}
+
+model Project {
+  id                    String   @id @default(uuid()) @db.Uuid
+  user_id               String   @db.Uuid
+  name                  String
+  api_key_hash          String   @unique
+  allowed_origins       String[]
+  block_unknown_origins Boolean  @default(false)
+  clustering_threshold  Float    @default(0.15)
+  created_at            DateTime @default(now()) @db.Timestamptz
+
+  user         User                 @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  sessions     Session[]
+  events       Event[]
+  errors       Error[]
+  clusters     ErrorCluster[]
+  bugs         Bug[]
+  integrations ProjectIntegration[]
+  rules        Rule[]
+}
+
+model Session {
+  id          String    @id @default(uuid()) @db.Uuid
+  project_id  String    @db.Uuid
+  started_at  DateTime  @default(now()) @db.Timestamptz
+  ended_at    DateTime? @db.Timestamptz
+  user_agent  String?
+  initial_url String?
+  metadata    Json?
+
+  project Project @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  events  Event[]
+  errors  Error[]
+  bugs    Bug[]
+
+  @@index([project_id, started_at(sort: Desc)])
+}
+
+model Event {
+  id         String   @id @default(uuid()) @db.Uuid
+  session_id String   @db.Uuid
+  project_id String   @db.Uuid
+  type       String
+  timestamp  BigInt
+  payload    Json
+
+  session  Session  @relation(fields: [session_id], references: [id], onDelete: Cascade)
+  project  Project  @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  error    Error?
+
+  @@index([project_id, session_id, timestamp])
+}
+
+model Error {
+  id           String                  @id @default(uuid()) @db.Uuid
+  session_id   String                  @db.Uuid
+  project_id   String                  @db.Uuid
+  event_id     String                  @unique @db.Uuid
+  message      String
+  stack        String?
+  fingerprint  String
+  dedup_bucket DateTime                @db.Timestamptz
+  vector       Unsupported("vector(1536)")?
+  cluster_id   String?                 @db.Uuid
+  created_at   DateTime                @default(now()) @db.Timestamptz
+
+  session  Session       @relation(fields: [session_id], references: [id], onDelete: Cascade)
+  project  Project       @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  event    Event         @relation(fields: [event_id], references: [id], onDelete: Cascade)
+  cluster  ErrorCluster? @relation(fields: [cluster_id], references: [id])
+  bug      Bug?
+
+  @@unique([fingerprint, project_id, dedup_bucket])
+  @@index([project_id, fingerprint])
+}
+
+model ErrorCluster {
+  id               String   @id @default(uuid()) @db.Uuid
+  project_id       String   @db.Uuid
+  centroid         Unsupported("vector(1536)")?
+  label            String?
+  occurrence_count Int      @default(1)
+  last_seen_at     DateTime @default(now()) @db.Timestamptz
+  created_at       DateTime @default(now()) @db.Timestamptz
+
+  project Project @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  errors  Error[]
+
+  @@index([project_id])
+}
+
+model Bug {
+  id                  String   @id @default(uuid()) @db.Uuid
+  project_id          String   @db.Uuid
+  session_id          String   @db.Uuid
+  error_id            String   @unique @db.Uuid
+  summary             String?
+  root_cause          String?
+  steps_to_reproduce  Json?
+  fix_suggestion      String?
+  severity            String?
+  screenshot_url      String?
+  replay_url          String?
+  status              String   @default("open")
+  ai_model_version    String?
+  ai_raw_output       Json?
+  created_at          DateTime @default(now()) @db.Timestamptz
+
+  project Project @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  session Session @relation(fields: [session_id], references: [id], onDelete: Cascade)
+  error   Error   @relation(fields: [error_id], references: [id], onDelete: Cascade)
+
+  deliveries       IntegrationDelivery[]
+  rule_exec_logs   RuleExecutionLog[]
+
+  @@index([project_id, status, created_at(sort: Desc)])
+}
+
+model AiPromptVersion {
+  id                    String   @id @default(uuid()) @db.Uuid
+  version               String   @unique
+  system_prompt         String
+  user_prompt_template  String
+  is_active             Boolean  @default(false)
+  created_at            DateTime @default(now()) @db.Timestamptz
+}
+
+model ProjectIntegration {
+  id          String   @id @default(uuid()) @db.Uuid
+  project_id  String   @db.Uuid
+  provider_id String
+  config      Json
+  is_active   Boolean  @default(true)
+  created_at  DateTime @default(now()) @db.Timestamptz
+
+  project    Project               @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  deliveries IntegrationDelivery[]
+
+  @@index([project_id, is_active])
+}
+
+model IntegrationDelivery {
+  id                 String    @id @default(uuid()) @db.Uuid
+  integration_id     String    @db.Uuid
+  bug_id             String    @db.Uuid
+  status             String    @default("pending")
+  remote_ticket_id   String?
+  remote_ticket_url  String?
+  response           Json?
+  attempts           Int       @default(0)
+  next_retry_at      DateTime? @db.Timestamptz
+  created_at         DateTime  @default(now()) @db.Timestamptz
+
+  integration ProjectIntegration @relation(fields: [integration_id], references: [id], onDelete: Cascade)
+  bug         Bug                @relation(fields: [bug_id], references: [id], onDelete: Cascade)
+
+  @@index([status, next_retry_at])
+}
+
+model Rule {
+  id         String   @id @default(uuid()) @db.Uuid
+  project_id String   @db.Uuid
+  name       String
+  conditions Json
+  action     String
+  is_active  Boolean  @default(true)
+  created_at DateTime @default(now()) @db.Timestamptz
+
+  project    Project            @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  exec_logs  RuleExecutionLog[]
+
+  @@index([project_id, is_active])
+}
+
+model RuleExecutionLog {
+  id           String   @id @default(uuid()) @db.Uuid
+  rule_id      String   @db.Uuid
+  bug_id       String   @db.Uuid
+  matched      Boolean
+  action_taken String?
+  created_at   DateTime @default(now()) @db.Timestamptz
+
+  rule Rule @relation(fields: [rule_id], references: [id], onDelete: Cascade)
+  bug  Bug  @relation(fields: [bug_id], references: [id], onDelete: Cascade)
+}

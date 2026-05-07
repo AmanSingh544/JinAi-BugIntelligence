@@ -1,0 +1,261 @@
+AI-Powered Browser Extension Bug Intelligence System
+Complete System Design, Tech Stack, Core Architecture & Roadmap
+1. Product Vision
+Build a product-level system, not just an extension:
+A platform that automatically captures, understands, and explains bugs — and helps developers fix them faster.
+Core Objectives
+Capture everything (errors, logs, user actions)
+Reconstruct what happened (timeline/session)
+Understand the issue (AI reasoning)
+Assist in fixing (suggestions, prioritisation)
+Reduce user effort to near zero
+2. High-Level Architecture
+Layer 1: Browser Extension (Data Capture Layer)
+Content Script
+Error tracking
+Network interception
+User action tracking
+Background Service Worker
+Buffering & batching
+Sending data to backend
+UI (React)
+Popup / Side panel
+Report bug interface
+Layer 2: Backend (NestJS)
+Ingestion
+Session
+Event Processing
+Error Analysis
+AI Engine
+Ticket Integration
+Layer 3: Data Layer
+PostgreSQL (main DB)
+pgvector (embeddings + clustering)
+Redis (queue + cache)
+S3 (media storage)
+Layer 4: AI Layer
+OpenRouter + OpenAI
+Structured prompt pipelines
+Embedding-based similarity
+3. Final Tech Stack
+Frontend / Extension
+React + TypeScript
+Vite
+Tailwind / CSS
+Zustand (optional)
+Backend
+NestJS
+WebSockets
+BullMQ (Redis queue)
+Database
+PostgreSQL
+pgvector
+Storage
+AWS S3 / Cloudinary
+AI
+OpenRouter
+OpenAI SDK
+Replay
+rrweb
+4. Core System (Foundation)
+4.1 Event System (Most Important)
+Everything is an event.
+Event Schema
+type BaseEvent = {
+  id: string;
+  sessionId: string;
+  timestamp: number;
+  type: EventType;
+  url: string;
+};
+type EventType =
+  | 'click'
+  | 'input'
+  | 'navigation'
+  | 'api_request'
+  | 'api_response'
+  | 'error'
+  | 'console';
+Example Events
+Click Event
+{
+  type: 'click',
+  payload: {
+    tag: 'button',
+    text: 'Submit',
+    selector: '#submit-btn'
+  }
+}
+API Event
+{
+  type: 'api_response',
+  payload: {
+    url: '/checkout',
+    method: 'POST',
+    status: 500,
+    responseBody: {},
+    duration: 320
+  }
+}
+Error Event
+{
+  type: 'error',
+  payload: {
+    message: 'Cannot read property of undefined',
+    stack: '...',
+    file: 'app.js',
+    line: 45
+  }
+}
+4.2 Session System
+Generate sessionId on page load
+Store in sessionStorage
+const sessionId = crypto.randomUUID();
+Session Metadata
+{
+  sessionId,
+  startTime,
+  userAgent,
+  url,
+  userId
+}
+4.3 Event Buffering (Extension)
+Strategy:
+Store events locally
+Flush periodically
+if (events.length > 20 || timeElapsed > 5s) {
+  sendBatch();
+}
+4.4 Backend Ingestion
+API:
+POST /events/batch
+Flow:
+Extension → API → BullMQ → Worker → Database
+4.5 Database Design
+sessions
+id
+start_time
+user_id
+metadata (jsonb)
+events
+id
+session_id
+type
+timestamp
+payload (jsonb)
+errors
+id
+session_id
+event_id
+message
+stack
+vector (pgvector)
+4.6 Timeline Reconstruction
+SELECT * FROM events
+WHERE session_id = ?
+ORDER BY timestamp;
+4.7 Error Correlation
+attach last 10 events
+attach last API call
+5. Advanced Features (Intelligence Layer)
+5.1 AI Bug Analysis
+Input:
+error
+session events
+API logs
+Output:
+{
+  "summary": "",
+  "root_cause": "",
+  "steps_to_reproduce": [],
+  "fix_suggestion": "",
+  "severity": "high"
+}
+5.2 Error Clustering
+Generate embeddings
+Store in pgvector
+Query:
+ORDER BY vector <-> current_vector
+5.3 Session Replay
+Using rrweb
+Capture:
+DOM changes
+user actions
+Replay:
+timeline scrubber
+visual reconstruction
+5.4 Screenshot System
+Auto on error
+Manual trigger
+chrome.tabs.captureVisibleTab()
+5.5 Screen Recording
+MediaRecorder API
+Requires permission
+5.6 Auto Ticket Creation
+Payload:
+{
+  "summary": "",
+  "steps": [],
+  "logs": [],
+  "screenshot": "",
+  "replayUrl": ""
+}
+5.7 AI Debug Assistant
+User asks:
+Why did this fail?
+AI responds using session context
+5.8 Severity Detection
+Rules + AI:
+if (status >= 500) severity = 'high';
+6. Engineering Challenges
+Performance
+Data Volume
+Privacy 🚨
+Browser Limitations
+Avoid heavy DOM operations; use batching
+Limit stored events; compress payloads
+Mask passwords and tokens; allow opt-in tracking
+No HTTP-only cookies; no silent recording
+7. Development Roadmap
+Phase 1 (MVP)
+Error tracking
+API logging
+Event batching
+Backend ingestion
+Phase 2
+User action tracking
+Screenshot capture
+Ticket creation
+Phase 3
+AI summaries
+Steps to reproduce
+Phase 4
+Session replay
+Error clustering
+AI assistant
+8. Key System Philosophy
+Core System
+Capture truth
+Advanced System
+Understand truth
+Product Goal
+Explain truth
+9. Final Conclusion
+You are not building:
+a Chrome extension ❌
+a logging tool ❌
+You are building:
+A full-scale AI-powered debugging and observability platform
+Strength of Your Current Stack
+Already production capable
+Supports AI integration
+Scalable with minor improvements
+Critical Success Factor
+Not tools. Not AI.
+Clean event architecture + session system
+Final Advice
+Don’t overbuild early
+Build core first
+Add intelligence later
+Keep data structured
+End of Document

@@ -1,0 +1,12 @@
+/backend/dist
+/backend/node_modules
+/backend/.env
+
+/dashboard/dist
+/dashboard/node_modules
+/dashboard/.env
+/dashboard/public
+
+/extension/dist
+/extension/node_modules
+/extension/public
