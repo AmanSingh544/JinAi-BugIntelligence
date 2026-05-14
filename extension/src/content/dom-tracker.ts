@@ -1,5 +1,6 @@
 import type { ClickEvent, NavigationEvent } from '../shared/types';
 import { generateId, getSessionId, sendEvent, buildSelector } from './shared';
+import { startReplayRecording } from './replay-tracker';
 
 // ── Click tracking ────────────────────────────────────────────────────────────
 
@@ -53,3 +54,6 @@ history.pushState = (...args) => { originalPushState(...args); onNavigate(); };
 history.replaceState = (...args) => { originalReplaceState(...args); onNavigate(); };
 
 window.addEventListener('popstate', onNavigate);
+
+// Start replay recording if enabled
+startReplayRecording();

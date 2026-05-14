@@ -57,6 +57,25 @@ export default function App() {
     });
   }
 
+  async function toggleCapture() {
+    const nextEnabled = !config.enabled;
+    if (nextEnabled) {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const captureTabId = tab?.id ?? null;
+      chrome.storage.local.set({ enabled: true, captureTabId }, () => {
+        setConfig(prev => ({ ...prev, enabled: true }));
+        setIsSaved(true);
+        setTimeout(() => setIsSaved(false), 1500);
+      });
+    } else {
+      chrome.storage.local.set({ enabled: false, captureTabId: null }, () => {
+        setConfig(prev => ({ ...prev, enabled: false }));
+        setIsSaved(true);
+        setTimeout(() => setIsSaved(false), 1500);
+      });
+    }
+  }
+
   return (
     <div style={wrap}>
       <div style={header}>
@@ -84,7 +103,7 @@ export default function App() {
         />
       </div>
 
-      <button style={toggle(config.enabled)} onClick={() => save({ enabled: !config.enabled })}>
+      <button style={toggle(config.enabled)} onClick={toggleCapture}>
         {config.enabled ? 'Pause Capture' : 'Start Capture'}
       </button>
 

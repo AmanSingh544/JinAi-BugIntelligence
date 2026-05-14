@@ -35,6 +35,7 @@ function buildContentScripts(): Plugin {
         await build({
           configFile: false,
           build: {
+            sourcemap: true,
             outDir: resolve(__dirname, 'dist/content'),
             emptyOutDir: false,
             lib: {
@@ -58,6 +59,7 @@ function buildContentScripts(): Plugin {
 export default defineConfig({
   plugins: [react(), fixPopupPath(), buildContentScripts()],
   build: {
+    sourcemap: true,
     outDir: 'dist',
     emptyOutDir: true,
     rollupOptions: {

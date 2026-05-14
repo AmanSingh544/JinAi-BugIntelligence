@@ -6,10 +6,31 @@ import { PrismaService } from '../../shared/prisma/prisma.service';
 import { DispatchJob, DispatchQueue, DISPATCH_QUEUE } from './dispatch.queue';
 import { IntegrationRegistry } from './providers/integration.registry';
 import type { BugReportPayload, JsonValue } from './providers/integration.interface';
+import { ProviderError } from './providers/provider-error';
+import { PipelineTrackerService } from '../system/pipeline-tracker.service';
+import {
+  DEFAULT_DISPATCH_RETRY_POLICY,
+  computeRetryDelay,
+} from '../../shared/retry/retry-policy';
 import type { Prisma } from '@prisma/client';
+import { acquireLock } from '../../shared/redis/acquire-lock';
+import { releaseLock } from '../../shared/redis/release-lock';
+import { MetricsService } from '../../shared/metrics/metrics.service';
 
-const BACKOFF_MS = [0, 30_000, 300_000, 1_800_000, 7_200_000];
-const MAX_ATTEMPTS = 5;
+const PROVIDER_COOLDOWN_PREFIX = 'provider:cooldown:';
+const PROVIDER_FAILURE_COUNT_PREFIX = 'provider:failure_count:';
+const COOLDOWN_TTL_SECONDS = 300; // 5 minutes
+
+const LOCK_PREFIX = `${process.env.NODE_ENV ?? 'development'}:queue:dispatch:lock:`;
+const LOCK_TTL_SECONDS = 180;
+
+function buildDispatchLockKey(dispatchKey: string): string {
+  return `${LOCK_PREFIX}${dispatchKey}`;
+}
+
+function buildLockValue(jobId: string): string {
+  return `${jobId}:${Date.now()}`;
+}
 
 @Injectable()
 export class DispatchWorker implements OnModuleInit, OnModuleDestroy {
@@ -21,6 +42,8 @@ export class DispatchWorker implements OnModuleInit, OnModuleDestroy {
     private readonly prisma: PrismaService,
     private readonly registry: IntegrationRegistry,
     private readonly dispatchQueue: DispatchQueue,
+    private readonly tracker: PipelineTrackerService,
+    private readonly metrics: MetricsService,
   ) {}
 
   onModuleInit() {
@@ -40,7 +63,11 @@ export class DispatchWorker implements OnModuleInit, OnModuleDestroy {
   }
 
   private async process(job: Job<DispatchJob>) {
-    const { bugId, integrationId, attempt } = job.data;
+    return this.metrics.wrapJob('dispatch', async () => {
+    const start = Date.now();
+    const { bugId, integrationId, attempt, trackingId } = job.data;
+
+    await this.tracker.recordStage(trackingId, 'dispatch');
 
     const [bug, integration] = await Promise.all([
       this.prisma.bug.findUnique({
@@ -58,63 +85,176 @@ export class DispatchWorker implements OnModuleInit, OnModuleDestroy {
     const payload = this.buildPayload(bug);
     const provider = this.registry.get(integration.provider_id);
 
-    let delivery = await this.prisma.integrationDelivery.findFirst({
-      where: { bug_id: bugId, integration_id: integrationId },
-    });
+    const dispatchKey = `${bugId}:${integrationId}`;
+    const lockKey = buildDispatchLockKey(dispatchKey);
+    const lockValue = buildLockValue(String(job.id));
 
-    if (!delivery) {
-      delivery = await this.prisma.integrationDelivery.create({
-        data: { bug_id: bugId, integration_id: integrationId, status: 'retrying', attempts: 0 },
-      });
+    let acquired = false;
+    try {
+      acquired = await acquireLock(this.redis, lockKey, lockValue, LOCK_TTL_SECONDS);
+      if (!acquired) {
+        this.logger.debug(`Dispatch lock already held for ${dispatchKey}, skipping`);
+        return;
+      }
+    } catch (redisErr) {
+      this.logger.error(
+        `Redis error acquiring dispatch lock for ${dispatchKey}: ${(redisErr as Error).message}`,
+      );
+      throw redisErr; // Let BullMQ retry the job
     }
 
     try {
-      const result = await provider.createTicket(payload, integration.config as Record<string, JsonValue>);
-
-      await this.prisma.integrationDelivery.update({
-        where: { id: delivery.id },
-        data: {
-          status: 'success',
-          remote_ticket_id: result.ticketId,
-          remote_ticket_url: result.url,
-          attempts: attempt,
-          response: result as unknown as Prisma.JsonObject,
-        },
+      // Idempotency check (fast path — still racy without the lock, but cheap)
+      const existingSuccess = await this.prisma.integrationDelivery.findFirst({
+        where: { dispatch_key: dispatchKey, status: 'success' },
       });
-
-      this.logger.log(`Dispatched bug ${bugId} → ${provider.name} ticket ${result.ticketId}`);
-    } catch (err) {
-      const message = (err as Error).message;
-      this.logger.warn(`Dispatch attempt ${attempt} failed for bug ${bugId}: ${message}`);
-
-      if (attempt >= MAX_ATTEMPTS) {
-        await this.prisma.integrationDelivery.update({
-          where: { id: delivery.id },
-          data: { status: 'dead', attempts: attempt, response: { error: message } as Prisma.JsonObject },
-        });
-        await this.dispatchQueue.addToDlq({ bugId, integrationId, attempt });
-        this.logger.error(`Bug ${bugId} dispatch dead after ${attempt} attempts`);
+      if (existingSuccess) {
+        this.logger.log(`Dispatch already succeeded for bug ${bugId} → ${integrationId}, skipping`);
         return;
       }
 
-      const delay = BACKOFF_MS[attempt] ?? BACKOFF_MS[BACKOFF_MS.length - 1] ?? 0;
-      await this.prisma.integrationDelivery.update({
-        where: { id: delivery.id },
-        data: {
-          status: 'retrying',
-          attempts: attempt,
-          next_retry_at: new Date(Date.now() + delay),
-        },
+      // Provider cooldown check
+      const cooldownKey = `${PROVIDER_COOLDOWN_PREFIX}${integrationId}`;
+      const cooldownUntil = await this.redis.get(cooldownKey);
+      if (cooldownUntil && Date.now() < parseInt(cooldownUntil, 10)) {
+        const waitMs = parseInt(cooldownUntil, 10) - Date.now();
+        this.logger.warn(`Provider ${provider.id} (integration=${integrationId}) in cooldown — requeuing in ${waitMs}ms`);
+        await this.requeue(job.data, waitMs, 'provider_cooldown');
+        return;
+      }
+
+      let delivery = await this.prisma.integrationDelivery.findFirst({
+        where: { bug_id: bugId, integration_id: integrationId },
       });
 
-      await this.dispatchQueue.add({ bugId, integrationId, attempt: attempt + 1 }, delay);
+      if (!delivery) {
+        delivery = await this.prisma.integrationDelivery.create({
+          data: {
+            bug_id: bugId,
+            integration_id: integrationId,
+            dispatch_key: dispatchKey,
+            status: 'retrying',
+            attempts: 0,
+          },
+        });
+      }
+
+      // Track first attempt timestamp for retry horizon
+      const firstAttemptAt = delivery.created_at.getTime();
+
+      try {
+        const result = await provider.createTicket(payload, integration.config as Record<string, JsonValue>);
+
+        try {
+          await this.prisma.$transaction([
+            this.prisma.integrationDelivery.update({
+              where: { id: delivery.id },
+              data: {
+                status: 'success',
+                remote_ticket_id: result.ticketId,
+                remote_ticket_url: result.url,
+                attempts: attempt,
+                response: result as unknown as Prisma.JsonObject,
+              },
+            }),
+          ]);
+        } catch (dbErr) {
+          // Partial unique index violation = another worker already succeeded
+          const msg = (dbErr as Error).message ?? '';
+          if (msg.includes('integration_delivery_unique_success_idx') || msg.includes('Unique constraint')) {
+            this.logger.log(
+              `Duplicate success prevented by DB guardrail for bug ${bugId} → ${integrationId} — treating as already dispatched`,
+            );
+            return;
+          }
+          throw dbErr;
+        }
+
+        // Clear failure counter on success
+        await this.redis.del(`${PROVIDER_FAILURE_COUNT_PREFIX}${integrationId}`);
+
+        this.logger.log(`Dispatched bug ${bugId} → ${provider.name} ticket ${result.ticketId}`);
+        await this.tracker.recordLatency('dispatch', Date.now() - start);
+      } catch (err) {
+        const providerErr = err instanceof ProviderError ? err : null;
+        const message = (err as Error).message;
+        const statusCode = providerErr?.statusCode ?? 0;
+        const retryAfterSeconds = providerErr?.retryAfterSeconds;
+
+        this.logger.warn(
+          `Dispatch attempt ${attempt} failed for bug ${bugId}: ${message}` +
+            (retryAfterSeconds ? ` [Retry-After=${retryAfterSeconds}s]` : ''),
+        );
+
+        // Track provider failures for observability
+        await this.redis.incr(`${PROVIDER_FAILURE_COUNT_PREFIX}${integrationId}`);
+        await this.redis.expire(`${PROVIDER_FAILURE_COUNT_PREFIX}${integrationId}`, COOLDOWN_TTL_SECONDS);
+
+        // Set cooldown on rate-limit or server errors
+        if (providerErr?.isRateLimit || providerErr?.isServerError) {
+          const cooldownMs = retryAfterSeconds
+            ? retryAfterSeconds * 1000
+            : DEFAULT_DISPATCH_RETRY_POLICY.baseDelayMs * Math.pow(2, attempt);
+          const cooldownUntil = Date.now() + Math.min(cooldownMs, DEFAULT_DISPATCH_RETRY_POLICY.maxDelayMs);
+          await this.redis.set(cooldownKey, cooldownUntil, 'EX', COOLDOWN_TTL_SECONDS);
+          this.logger.warn(`Provider ${provider.id} cooldown set until ${new Date(cooldownUntil).toISOString()}`);
+        }
+
+        // Compute retry delay with exponential backoff + jitter + Retry-After + max horizon
+        const delay = computeRetryDelay(attempt, firstAttemptAt, DEFAULT_DISPATCH_RETRY_POLICY, retryAfterSeconds);
+
+        if (delay === null || attempt >= DEFAULT_DISPATCH_RETRY_POLICY.maxAttempts) {
+          await this.prisma.integrationDelivery.update({
+            where: { id: delivery.id },
+            data: {
+              status: 'dead',
+              attempts: attempt,
+              response: { error: message, statusCode, retryAfterSeconds } as Prisma.JsonObject,
+            },
+          });
+          await this.dispatchQueue.addToDlq({ bugId, integrationId, attempt });
+          this.logger.error(`Bug ${bugId} dispatch dead after ${attempt} attempts (horizon=${delay === null ? 'exceeded' : 'max attempts'})`);
+          await this.tracker.recordLatency('dispatch', Date.now() - start);
+          return;
+        }
+
+        await this.prisma.integrationDelivery.update({
+          where: { id: delivery.id },
+          data: {
+            status: 'retrying',
+            attempts: attempt,
+            next_retry_at: new Date(Date.now() + delay),
+          },
+        });
+
+        await this.requeue(job.data, delay, 'retry');
+        await this.tracker.recordLatency('dispatch', Date.now() - start);
+      }
+    } finally {
+      if (acquired) {
+        try {
+          await releaseLock(this.redis, lockKey, lockValue);
+        } catch (releaseErr) {
+          // Unlock failure after successful persistence is operationally important
+          // but must NOT fail the job — the ticket was already created
+          this.logger.warn(
+            `Failed to release dispatch lock ${lockKey} after dispatch: ${(releaseErr as Error).message}`,
+          );
+        }
+      }
     }
+    });
+  }
+
+  private async requeue(data: DispatchJob, delayMs: number, reason: string) {
+    this.logger.debug(`Requeuing dispatch bug=${data.bugId} integration=${data.integrationId} delay=${delayMs}ms reason=${reason}`);
+    await this.dispatchQueue.add({ ...data, attempt: data.attempt + 1 }, delayMs);
   }
 
   private buildPayload(bug: {
     id: string;
     project_id: string;
-    session_id: string;
+    session_id: string | null;
     summary: string | null;
     root_cause: string | null;
     steps_to_reproduce: Prisma.JsonValue;
@@ -124,15 +264,15 @@ export class DispatchWorker implements OnModuleInit, OnModuleDestroy {
     error: {
       message: string;
       stack: string | null;
-      event: { url?: string; payload: Prisma.JsonValue };
+      event: { url?: string; payload: Prisma.JsonValue } | null;
     };
-    session: { user_agent: string | null };
+    session: { user_agent: string | null } | null;
   }): BugReportPayload {
     const steps = Array.isArray(bug.steps_to_reproduce)
       ? (bug.steps_to_reproduce as string[])
       : [];
 
-    const eventPayload = bug.error.event.payload as { url?: string } | null;
+    const eventPayload = bug.error.event?.payload as { url?: string } | null;
 
     return {
       bugId: bug.id,
@@ -144,9 +284,9 @@ export class DispatchWorker implements OnModuleInit, OnModuleDestroy {
       severity: (bug.severity ?? 'medium') as BugReportPayload['severity'],
       errorMessage: bug.error.message,
       stackTrace: bug.error.stack ?? undefined,
-      sessionUrl: `http://localhost:5173/sessions/${bug.session_id}`,
+      sessionUrl: bug.session_id ? `http://localhost:5173/sessions/${bug.session_id}` : 'Unknown',
       affectedUrl: eventPayload?.url ?? 'Unknown',
-      browser: bug.session.user_agent ?? 'Unknown',
+      browser: bug.session?.user_agent ?? 'Unknown',
       timestamp: bug.created_at.toISOString(),
       sessionId: bug.session_id,
     };

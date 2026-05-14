@@ -12,7 +12,8 @@
   "dependencies": {
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
-    "react-router-dom": "^7.15.0"
+    "react-router-dom": "^7.15.0",
+    "rrweb-player": "^1.0.0-alpha.4"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

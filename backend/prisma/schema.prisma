@@ -8,18 +8,69 @@ datasource db {
   extensions = [pgvector(map: "vector")]
 }
 
+enum TenantRole {
+  owner
+  admin
+  developer
+  viewer
+}
+
+model Tenant {
+  id         String   @id @default(uuid()) @db.Uuid
+  name       String
+  created_at DateTime @default(now()) @db.Timestamptz
+
+  projects   Project[]
+  members    TenantMember[]
+  audit_logs AuditLog[]
+}
+
+model TenantMember {
+  id         String    @id @default(uuid()) @db.Uuid
+  tenant_id  String    @db.Uuid
+  user_id    String    @db.Uuid
+  role       TenantRole @default(owner)
+  created_at DateTime  @default(now()) @db.Timestamptz
+
+  tenant Tenant @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([tenant_id, user_id])
+  @@index([user_id])
+}
+
+model AuditLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenant_id   String   @db.Uuid
+  actor_id    String   @db.Uuid
+  action      String
+  entity_type String
+  entity_id   String?  @db.Uuid
+  metadata    Json?
+  created_at  DateTime @default(now()) @db.Timestamptz
+
+  tenant Tenant @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  actor  User   @relation(fields: [actor_id], references: [id], onDelete: Cascade)
+
+  @@index([tenant_id, created_at(sort: Desc)])
+  @@index([actor_id, created_at(sort: Desc)])
+}
+
 model User {
   id            String    @id @default(uuid()) @db.Uuid
   email         String    @unique
   password_hash String
   created_at    DateTime  @default(now()) @db.Timestamptz
 
-  projects      Project[]
+  notifications UserNotification[]
+  assigned_bugs Bug[]
+  members       TenantMember[]
+  audit_logs    AuditLog[]
 }
 
 model Project {
   id                    String   @id @default(uuid()) @db.Uuid
-  user_id               String   @db.Uuid
+  tenant_id             String   @db.Uuid
   name                  String
   api_key_hash          String   @unique
   allowed_origins       String[]
@@ -27,29 +78,38 @@ model Project {
   clustering_threshold  Float    @default(0.15)
   created_at            DateTime @default(now()) @db.Timestamptz
 
-  user         User                 @relation(fields: [user_id], references: [id], onDelete: Cascade)
-  sessions     Session[]
-  events       Event[]
-  errors       Error[]
-  clusters     ErrorCluster[]
-  bugs         Bug[]
-  integrations ProjectIntegration[]
-  rules        Rule[]
+  tenant        Tenant               @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  sessions      Session[]
+  events        Event[]
+  errors        Error[]
+  clusters      ErrorCluster[]
+  bugs          Bug[]
+  integrations  ProjectIntegration[]
+  rules         Rule[]
+  environments  ProjectEnvironment[]
+  releases      Release[]
+  replay_segments ReplaySegment[]
+  notification_channels NotificationChannel[]
+  notifications UserNotification[]
+  chat_threads  ChatThread[]
 }
 
 model Session {
-  id          String    @id @default(uuid()) @db.Uuid
-  project_id  String    @db.Uuid
-  started_at  DateTime  @default(now()) @db.Timestamptz
-  ended_at    DateTime? @db.Timestamptz
-  user_agent  String?
-  initial_url String?
-  metadata    Json?
+  id             String    @id @default(uuid()) @db.Uuid
+  project_id     String    @db.Uuid
+  environment_id String?   @db.Uuid
+  started_at     DateTime  @default(now()) @db.Timestamptz
+  ended_at       DateTime? @db.Timestamptz
+  user_agent     String?
+  initial_url    String?
+  metadata       Json?
 
-  project Project @relation(fields: [project_id], references: [id], onDelete: Cascade)
-  events  Event[]
-  errors  Error[]
-  bugs    Bug[]
+  project     Project              @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  environment ProjectEnvironment?  @relation(fields: [environment_id], references: [id], onDelete: SetNull)
+  events      Event[]
+  errors      Error[]
+  bugs        Bug[]
+  replay_segments ReplaySegment[]
 
   @@index([project_id, started_at(sort: Desc)])
 }
@@ -70,21 +130,24 @@ model Event {
 }
 
 model Error {
-  id           String                  @id @default(uuid()) @db.Uuid
-  session_id   String                  @db.Uuid
-  project_id   String                  @db.Uuid
-  event_id     String                  @unique @db.Uuid
-  message      String
-  stack        String?
-  fingerprint  String
-  dedup_bucket DateTime                @db.Timestamptz
-  vector       Unsupported("vector(1536)")?
-  cluster_id   String?                 @db.Uuid
-  created_at   DateTime                @default(now()) @db.Timestamptz
+  id             String                  @id @default(uuid()) @db.Uuid
+  session_id     String                  @db.Uuid
+  project_id     String                  @db.Uuid
+  event_id       String?                 @unique @db.Uuid
+  release_id     String?                 @db.Uuid
+  message        String
+  stack          String?
+  stack_unminified String?
+  fingerprint    String
+  dedup_bucket   DateTime                @db.Timestamptz
+  vector         Unsupported("vector(1536)")?
+  cluster_id     String?                 @db.Uuid
+  created_at     DateTime                @default(now()) @db.Timestamptz
 
   session  Session       @relation(fields: [session_id], references: [id], onDelete: Cascade)
   project  Project       @relation(fields: [project_id], references: [id], onDelete: Cascade)
-  event    Event         @relation(fields: [event_id], references: [id], onDelete: Cascade)
+  event    Event?        @relation(fields: [event_id], references: [id], onDelete: SetNull)
+  release  Release?      @relation(fields: [release_id], references: [id], onDelete: SetNull)
   cluster  ErrorCluster? @relation(fields: [cluster_id], references: [id])
   bug      Bug?
 
@@ -100,9 +163,11 @@ model ErrorCluster {
   occurrence_count Int      @default(1)
   last_seen_at     DateTime @default(now()) @db.Timestamptz
   created_at       DateTime @default(now()) @db.Timestamptz
+  bug_id           String?  @unique @db.Uuid
 
   project Project @relation(fields: [project_id], references: [id], onDelete: Cascade)
   errors  Error[]
+  bug     Bug?    @relation(fields: [bug_id], references: [id], onDelete: SetNull)
 
   @@index([project_id])
 }
@@ -110,7 +175,7 @@ model ErrorCluster {
 model Bug {
   id                  String   @id @default(uuid()) @db.Uuid
   project_id          String   @db.Uuid
-  session_id          String   @db.Uuid
+  session_id          String?  @db.Uuid
   error_id            String   @unique @db.Uuid
   summary             String?
   root_cause          String?
@@ -122,14 +187,25 @@ model Bug {
   status              String   @default("open")
   ai_model_version    String?
   ai_raw_output       Json?
+  ai_confidence       Float?
+  regression_detected_at DateTime? @db.Timestamptz
+  assigned_to         String?   @db.Uuid
+  regression_release_id String? @db.Uuid
   created_at          DateTime @default(now()) @db.Timestamptz
 
   project Project @relation(fields: [project_id], references: [id], onDelete: Cascade)
-  session Session @relation(fields: [session_id], references: [id], onDelete: Cascade)
+  session Session? @relation(fields: [session_id], references: [id], onDelete: SetNull)
   error   Error   @relation(fields: [error_id], references: [id], onDelete: Cascade)
+  assignee User?  @relation(fields: [assigned_to], references: [id], onDelete: SetNull)
+  regression_release Release? @relation(fields: [regression_release_id], references: [id], onDelete: SetNull)
+
+  cluster     ErrorCluster?
 
   deliveries       IntegrationDelivery[]
   rule_exec_logs   RuleExecutionLog[]
+  notification_logs NotificationLog[]
+  notifications    UserNotification[]
+  chat_thread      ChatThread?
 
   @@index([project_id, status, created_at(sort: Desc)])
 }
@@ -141,6 +217,29 @@ model AiPromptVersion {
   user_prompt_template  String
   is_active             Boolean  @default(false)
   created_at            DateTime @default(now()) @db.Timestamptz
+}
+
+model ChatThread {
+  id         String   @id @default(uuid()) @db.Uuid
+  bug_id     String   @unique @db.Uuid
+  project_id String   @db.Uuid
+  created_at DateTime @default(now()) @db.Timestamptz
+
+  bug      Bug           @relation(fields: [bug_id], references: [id], onDelete: Cascade)
+  project  Project       @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  messages ChatMessage[]
+}
+
+model ChatMessage {
+  id         String   @id @default(uuid()) @db.Uuid
+  thread_id  String   @db.Uuid
+  role       String   // 'user' | 'assistant'
+  content    String
+  created_at DateTime @default(now()) @db.Timestamptz
+
+  thread ChatThread @relation(fields: [thread_id], references: [id], onDelete: Cascade)
+
+  @@index([thread_id, created_at])
 }
 
 model ProjectIntegration {
@@ -161,6 +260,7 @@ model IntegrationDelivery {
   id                 String    @id @default(uuid()) @db.Uuid
   integration_id     String    @db.Uuid
   bug_id             String    @db.Uuid
+  dispatch_key       String?   @unique
   status             String    @default("pending")
   remote_ticket_id   String?
   remote_ticket_url  String?
@@ -172,6 +272,7 @@ model IntegrationDelivery {
   integration ProjectIntegration @relation(fields: [integration_id], references: [id], onDelete: Cascade)
   bug         Bug                @relation(fields: [bug_id], references: [id], onDelete: Cascade)
 
+  @@index([bug_id, integration_id])
   @@index([status, next_retry_at])
 }
 
@@ -200,4 +301,131 @@ model RuleExecutionLog {
 
   rule Rule @relation(fields: [rule_id], references: [id], onDelete: Cascade)
   bug  Bug  @relation(fields: [bug_id], references: [id], onDelete: Cascade)
+}
+
+model ProjectEnvironment {
+  id                    String   @id @default(uuid()) @db.Uuid
+  project_id            String   @db.Uuid
+  name                  String
+  config_version        Int      @default(1)
+  sampling_click        Float    @default(1.0)
+  sampling_navigation   Float    @default(1.0)
+  sampling_console      Float    @default(1.0)
+  sampling_api          Float    @default(1.0)
+  sampling_error        Float    @default(1.0)
+  replay_enabled        Boolean  @default(false)
+  screenshot_on_error   Boolean  @default(false)
+  retention_events_days      Int @default(30)
+  retention_sessions_days    Int @default(30)
+  retention_replay_days      Int @default(7)
+  retention_screenshots_days Int @default(14)
+  retention_bug_detail_days  Int @default(30)
+  retention_dlq_days         Int @default(14)
+  created_at            DateTime @default(now()) @db.Timestamptz
+
+  project  Project   @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  sessions Session[]
+
+  @@unique([project_id, name])
+}
+
+model Release {
+  id                String   @id @default(uuid()) @db.Uuid
+  project_id        String   @db.Uuid
+  version           String
+  // DEPRECATED: migration-only fields — remove after 30 days
+  sourcemap         String?
+  sourcemap_size    Int?
+  sourcemap_parsed  Boolean  @default(false)
+  sourcemap_error   String?
+  // NEW:
+  sourcemaps        ReleaseSourcemap[]
+  metadata          Json?
+  created_at        DateTime @default(now()) @db.Timestamptz
+
+  project Project @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  errors  Error[]
+  regression_bugs Bug[]
+
+  @@unique([project_id, version])
+}
+
+model ReleaseSourcemap {
+  id                 String   @id @default(uuid()) @db.Uuid
+  release_id         String   @db.Uuid
+  minified_filename  String      // canonical lookup key, e.g. "vendor-AbC123.js"
+  declared_file      String?     // raw `file` field from sourcemap JSON
+  sourcemap_path     String      // disk path: "./uploads/sourcemaps/123456789.map"
+  sourcemap_size     Int?
+  content_hash       String?     // sha256 of sourcemap content
+  sourcemap_parsed   Boolean  @default(false)
+  sourcemap_error    String?
+  parse_warnings     Json?       // array of non-fatal warnings
+  uploaded_at        DateTime @default(now()) @db.Timestamptz
+
+  release Release @relation(fields: [release_id], references: [id], onDelete: Cascade)
+
+  @@unique([release_id, minified_filename])
+  @@index([release_id])
+}
+
+model ReplaySegment {
+  id         String   @id @default(uuid()) @db.Uuid
+  session_id String   @db.Uuid
+  project_id String   @db.Uuid
+  sequence   Int
+  events     Json
+  created_at DateTime @default(now()) @db.Timestamptz
+
+  session Session @relation(fields: [session_id], references: [id], onDelete: Cascade)
+  project Project @relation(fields: [project_id], references: [id], onDelete: Cascade)
+
+  @@index([session_id, sequence])
+}
+
+model NotificationChannel {
+  id          String   @id @default(uuid()) @db.Uuid
+  project_id  String   @db.Uuid
+  provider_id String
+  name        String
+  config      Json
+  is_active   Boolean  @default(true)
+  created_at  DateTime @default(now()) @db.Timestamptz
+
+  project Project            @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  logs    NotificationLog[]
+
+  @@index([project_id, is_active])
+}
+
+model NotificationLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  channel_id String   @db.Uuid
+  bug_id     String   @db.Uuid
+  status     String
+  response   Json?
+  created_at DateTime @default(now()) @db.Timestamptz
+
+  channel NotificationChannel @relation(fields: [channel_id], references: [id], onDelete: Cascade)
+  bug     Bug                 @relation(fields: [bug_id], references: [id], onDelete: Cascade)
+}
+
+model UserNotification {
+  id         String    @id @default(uuid()) @db.Uuid
+  user_id    String    @db.Uuid
+  project_id String    @db.Uuid
+  bug_id     String?   @db.Uuid
+  type       String    @default("bug_created")
+  title      String
+  body       String?
+  severity   String?
+  read_at    DateTime? @db.Timestamptz
+  created_at DateTime  @default(now()) @db.Timestamptz
+
+  user    User    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  project Project @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  bug     Bug?    @relation(fields: [bug_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id, read_at])
+  @@index([user_id, created_at(sort: Desc)])
 }

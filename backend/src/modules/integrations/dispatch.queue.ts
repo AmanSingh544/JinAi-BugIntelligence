@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { Queue } from 'bullmq';
 import Redis from 'ioredis';
 import { REDIS_CLIENT } from '../../shared/redis/redis.provider';
+import { MetricsService } from '../../shared/metrics/metrics.service';
 
 export const DISPATCH_QUEUE = 'dispatch';
 export const DISPATCH_DLQ = 'dispatch-dlq';
@@ -10,6 +11,7 @@ export interface DispatchJob {
   bugId: string;
   integrationId: string;
   attempt: number;
+  trackingId?: string;
 }
 
 @Injectable()
@@ -17,7 +19,10 @@ export class DispatchQueue {
   private readonly queue: Queue<DispatchJob>;
   private readonly dlq: Queue<DispatchJob>;
 
-  constructor(@Inject(REDIS_CLIENT) redis: Redis) {
+  constructor(
+    @Inject(REDIS_CLIENT) redis: Redis,
+    private readonly metrics: MetricsService,
+  ) {
     this.queue = new Queue<DispatchJob>(DISPATCH_QUEUE, {
       connection: redis,
       defaultJobOptions: {
@@ -31,6 +36,8 @@ export class DispatchQueue {
       connection: redis,
       defaultJobOptions: { removeOnComplete: false, removeOnFail: false },
     });
+    this.metrics.registerQueue(this.queue);
+    this.metrics.registerQueue(this.dlq);
   }
 
   async add(data: DispatchJob, delayMs = 0) {

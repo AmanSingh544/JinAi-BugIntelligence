@@ -8,8 +8,9 @@ export interface RuleCondition {
   value: string | number;
 }
 
-export interface RuleConditions {
-  all: RuleCondition[];
+export interface RuleConditionGroup {
+  operator: 'all' | 'any';
+  conditions: (RuleCondition | RuleConditionGroup)[];
 }
 
 interface EvalContext {
@@ -21,8 +22,19 @@ interface EvalContext {
 
 const SEVERITY_ORDER: Record<Severity, number> = { low: 0, medium: 1, high: 2, critical: 3 };
 
-export function evaluateRule(conditions: RuleConditions, ctx: EvalContext): boolean {
-  return conditions.all.every((c) => evalCondition(c, ctx));
+export function evaluateRule(conditions: RuleConditionGroup, ctx: EvalContext): boolean {
+  return evaluateGroup(conditions, ctx);
+}
+
+function evaluateGroup(group: RuleConditionGroup, ctx: EvalContext): boolean {
+  const results = group.conditions.map((c) =>
+    'operator' in c ? evaluateGroup(c, ctx) : evalCondition(c, ctx),
+  );
+
+  if (group.operator === 'all') {
+    return results.length === 0 ? true : results.every(Boolean);
+  }
+  return results.length === 0 ? false : results.some(Boolean);
 }
 
 function evalCondition(c: RuleCondition, ctx: EvalContext): boolean {
@@ -57,8 +69,31 @@ function compare(actual: number, op: string, expected: number): boolean {
   }
 }
 
-export function parseConditions(raw: Prisma.JsonValue): RuleConditions {
-  const parsed = raw as { all?: unknown[] };
-  if (!parsed?.all || !Array.isArray(parsed.all)) return { all: [] };
-  return { all: parsed.all as RuleCondition[] };
+export function parseConditions(raw: Prisma.JsonValue): RuleConditionGroup {
+  const parsed = raw as { all?: unknown[]; any?: unknown[]; operator?: string; conditions?: unknown[] };
+
+  // Backward compatibility: flat { all: [...] }
+  if (parsed?.all && Array.isArray(parsed.all)) {
+    return {
+      operator: 'all',
+      conditions: parsed.all as RuleCondition[],
+    };
+  }
+
+  if (parsed?.any && Array.isArray(parsed.any)) {
+    return {
+      operator: 'any',
+      conditions: parsed.any as RuleCondition[],
+    };
+  }
+
+  // Nested format
+  if (parsed?.operator && Array.isArray(parsed.conditions)) {
+    return {
+      operator: parsed.operator as 'all' | 'any',
+      conditions: parsed.conditions as (RuleCondition | RuleConditionGroup)[],
+    };
+  }
+
+  return { operator: 'all', conditions: [] };
 }

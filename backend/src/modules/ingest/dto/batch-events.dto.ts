@@ -18,7 +18,8 @@ export type EventType =
   | 'api_request'
   | 'api_response'
   | 'error'
-  | 'console';
+  | 'console'
+  | 'replay_snapshot';
 
 export class RawEventDto {
   @IsUUID()
@@ -30,7 +31,7 @@ export class RawEventDto {
   @IsNumber()
   timestamp: number;
 
-  @IsIn(['click', 'input', 'navigation', 'api_request', 'api_response', 'error', 'console'])
+  @IsIn(['click', 'input', 'navigation', 'api_request', 'api_response', 'error', 'console', 'replay_snapshot'])
   type: EventType;
 
   @IsString()
@@ -50,6 +51,7 @@ export class BatchEventsDto {
   sessionMeta?: {
     userAgent?: string;
     initialUrl?: string;
+    release?: string;
   };
 
   @IsArray()

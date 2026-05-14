@@ -9,7 +9,8 @@
   },
   "dependencies": {
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "rrweb": "^2.0.0-alpha.4"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.280",

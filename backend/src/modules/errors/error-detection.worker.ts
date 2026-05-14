@@ -5,8 +5,12 @@ import Redis from 'ioredis';
 import { REDIS_CLIENT } from '../../shared/redis/redis.provider';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { AiAnalysisQueue } from '../ai-analysis/ai-analysis.queue';
+import { EmbeddingQueue } from '../ai-analysis/embedding.queue';
+import { PipelineTrackerService } from '../system/pipeline-tracker.service';
 import { ErrorDetectionJob, ERROR_DETECTION_QUEUE } from './error-detection.queue';
-import { normalizeStack } from './normalize-stack';
+import { MetricsService } from '../../shared/metrics/metrics.service';
+import { normalizeStack, fingerprintNormalizeStack } from './normalize-stack';
+import { unminifyStack, type SourcemapRecord } from './stack-unminifier';
 
 @Injectable()
 export class ErrorDetectionWorker implements OnModuleInit, OnModuleDestroy {
@@ -17,6 +21,9 @@ export class ErrorDetectionWorker implements OnModuleInit, OnModuleDestroy {
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     private readonly prisma: PrismaService,
     private readonly aiQueue: AiAnalysisQueue,
+    private readonly embeddingQueue: EmbeddingQueue,
+    private readonly tracker: PipelineTrackerService,
+    private readonly metrics: MetricsService,
   ) {}
 
   onModuleInit() {
@@ -36,13 +43,62 @@ export class ErrorDetectionWorker implements OnModuleInit, OnModuleDestroy {
   }
 
   private async process(job: Job<ErrorDetectionJob>) {
-    const { projectId, sessionId, eventId, errorPayload } = job.data;
+    return this.metrics.wrapJob('error-detection', async () => {
+    const start = Date.now();
+    const { projectId, sessionId, eventId, errorPayload, releaseId, trackingId } = job.data;
+
+    await this.tracker.recordStage(trackingId, 'detection');
 
     this.logger.log(`Error detection: message="${errorPayload.message}" project=${projectId} session=${sessionId}`);
 
-    const normalized = normalizeStack(errorPayload.stack);
+    // Try to unminify stack using all sourcemaps for this release
+    let stackUnminified: string | null = null;
+    if (releaseId && errorPayload.stack) {
+      const sourcemapRecords = await this.prisma.releaseSourcemap.findMany({
+        where: { release_id: releaseId, sourcemap_parsed: true },
+      });
+
+      if (sourcemapRecords.length > 0) {
+        const sourcemaps = new Map<string, SourcemapRecord>(
+          sourcemapRecords.map((s) => [
+            s.minified_filename,
+            {
+              sourcemap_path: s.sourcemap_path,
+              declared_file: s.declared_file,
+              sourcemap_parsed: s.sourcemap_parsed,
+            },
+          ]),
+        );
+        stackUnminified = await unminifyStack(errorPayload.stack, sourcemaps);
+        if (stackUnminified) {
+          this.logger.debug(`Unminified stack for release ${releaseId}`);
+        }
+      } else {
+        // Fallback: check legacy single-sourcemap field (migration-only)
+        const release = await this.prisma.release.findUnique({ where: { id: releaseId } });
+        if (release?.sourcemap && release.sourcemap_parsed) {
+          const legacyMap = new Map<string, SourcemapRecord>([
+            [
+              'unknown',
+              {
+                sourcemap_path: release.sourcemap,
+                declared_file: null,
+                sourcemap_parsed: release.sourcemap_parsed,
+              },
+            ],
+          ]);
+          stackUnminified = await unminifyStack(errorPayload.stack, legacyMap);
+          if (stackUnminified) {
+            this.logger.debug(`Unminified stack using legacy sourcemap for release ${releaseId}`);
+          }
+        }
+      }
+    }
+
+    const normalized = normalizeStack(stackUnminified ?? errorPayload.stack);
+    const fingerprintNormalized = fingerprintNormalizeStack(stackUnminified ?? errorPayload.stack);
     const fingerprint = createHash('sha256')
-      .update(errorPayload.message + normalized)
+      .update(errorPayload.message + fingerprintNormalized)
       .digest('hex');
 
     // Dedup bucket = current hour (truncated) — prevents race conditions via DB unique constraint
@@ -55,14 +111,16 @@ export class ErrorDetectionWorker implements OnModuleInit, OnModuleDestroy {
     // Unique constraint: (fingerprint, project_id, dedup_bucket) in schema
     try {
       const created = await this.prisma.$queryRaw<{ id: string }[]>`
-        INSERT INTO "Error" (id, session_id, project_id, event_id, message, stack, fingerprint, dedup_bucket, created_at)
+        INSERT INTO "Error" (id, session_id, project_id, event_id, release_id, message, stack, stack_unminified, fingerprint, dedup_bucket, created_at)
         VALUES (
           gen_random_uuid(),
           ${sessionId}::uuid,
           ${projectId}::uuid,
           ${eventId}::uuid,
+          ${releaseId ?? null}::uuid,
           ${errorPayload.message},
           ${errorPayload.stack ?? null},
+          ${stackUnminified ?? null},
           ${fingerprint},
           ${dedupBucket},
           NOW()
@@ -73,18 +131,25 @@ export class ErrorDetectionWorker implements OnModuleInit, OnModuleDestroy {
 
       if (!created.length) {
         this.logger.debug(`Deduped error fingerprint=${fingerprint} for project=${projectId}`);
+        await this.tracker.recordLatency('detection', Date.now() - start);
         return;
       }
 
       const errorId = created[0].id;
 
       // Queue for AI analysis — only IDs + fingerprint, not the full payload
-      await this.aiQueue.add({ projectId, sessionId, errorId, fingerprint });
+      await this.aiQueue.add({ projectId, sessionId, errorId, fingerprint, trackingId });
+
+      // Queue for async embedding generation — decouples embedding API from analysis
+      const embeddingText = `${errorPayload.message} ${stackUnminified ?? errorPayload.stack ?? ''}`;
+      await this.embeddingQueue.add({ errorId, text: embeddingText });
 
       this.logger.debug(`New error detected id=${errorId} fingerprint=${fingerprint}`);
+      await this.tracker.recordLatency('detection', Date.now() - start);
     } catch (err) {
       this.logger.error(`Error detection failed: ${(err as Error).message}`);
       throw err;
     }
+    });
   }
 }

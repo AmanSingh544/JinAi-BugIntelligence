@@ -1,14 +1,17 @@
+import type { ProviderSchema } from '../../shared/provider-schema';
+
 const BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:4000/api/v1';
 
 function token() {
   return localStorage.getItem('token') ?? '';
 }
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
+export async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const isFormData = options?.body instanceof FormData;
   const res = await fetch(`${BASE}${path}`, {
     ...options,
     headers: {
-      'Content-Type': 'application/json',
+      ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
       Authorization: `Bearer ${token()}`,
       ...options?.headers,
     },
@@ -39,6 +42,7 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ email, password }),
       }),
+    me: () => request<{ id: string; email: string }>('/auth/me'),
   },
 
   projects: {
@@ -63,6 +67,8 @@ export const api = {
           initialUrl: r.initial_url,
         } as Session))
       ),
+    replay: (projectId: string, sessionId: string) =>
+      request<{ events: unknown[] }>(`/projects/${projectId}/sessions/${sessionId}/replay`),
   },
 
   bugs: {
@@ -79,6 +85,69 @@ export const api = {
         method: 'PATCH',
         body: JSON.stringify({ status }),
       }).then(mapBug),
+    assign: (projectId: string, bugId: string, userId: string) =>
+      request<RawBug>(`/projects/${projectId}/bugs/${bugId}/assign`, {
+        method: 'PATCH',
+        body: JSON.stringify({ userId }),
+      }).then(mapBug),
+    similar: (projectId: string, bugId: string) =>
+      request<{ similar: SimilarBug[] }>(`/projects/${projectId}/bugs/${bugId}/similar`),
+    clusterMembers: (projectId: string, bugId: string) =>
+      request<{ members: ClusterMember[] }>(`/projects/${projectId}/bugs/${bugId}/cluster-members`),
+    chat: {
+      getThread: (projectId: string, bugId: string) =>
+        request<ChatThread>(`/projects/${projectId}/bugs/${bugId}/chat`),
+      sendMessage: (projectId: string, bugId: string, message: string) =>
+        request<ChatMessage>(`/projects/${projectId}/bugs/${bugId}/chat`, {
+          method: 'POST',
+          body: JSON.stringify({ message }),
+        }),
+    },
+  },
+
+  environments: {
+    list: (projectId: string) => request<Environment[]>(`/projects/${projectId}/environments`),
+    update: (projectId: string, envId: string, dto: Partial<UpdateEnvironmentDto>) =>
+      request<Environment>(`/projects/${projectId}/environments/${envId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(dto),
+      }),
+  },
+
+  releases: {
+    list: (projectId: string) => request<Release[]>(`/projects/${projectId}/releases`),
+    create: (projectId: string, body: { version: string; metadata?: Record<string, unknown> }) =>
+      request<Release>(`/projects/${projectId}/releases`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    listSourcemaps: (projectId: string, releaseId: string, limit = 50, offset = 0) =>
+      request<{ items: ReleaseSourcemap[]; total: number; limit: number; offset: number }>(
+        `/projects/${projectId}/releases/${releaseId}/sourcemaps?limit=${limit}&offset=${offset}`
+      ),
+  },
+
+  integrations: {
+    list: (projectId: string) => request<Integration[]>(`/projects/${projectId}/integrations`),
+    create: (projectId: string, body: { provider_id: string; config: Record<string, unknown>; is_active?: boolean }) =>
+      request<Integration>(`/projects/${projectId}/integrations`, { method: 'POST', body: JSON.stringify(body) }),
+    update: (projectId: string, id: string, body: { config?: Record<string, unknown>; is_active?: boolean }) =>
+      request<Integration>(`/projects/${projectId}/integrations/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    delete: (projectId: string, id: string) => request<void>(`/projects/${projectId}/integrations/${id}`, { method: 'DELETE' }),
+    validate: (projectId: string, id: string) =>
+      request<{ valid: boolean; error?: string }>(`/projects/${projectId}/integrations/${id}/validate`, { method: 'POST' }),
+    providers: () => request<ProviderSchema[]>('/integrations/providers'),
+  },
+
+  notifications: {
+    list: (params?: { unreadOnly?: boolean; limit?: number; offset?: number }) => {
+      const q = new URLSearchParams(params as Record<string, string>).toString();
+      return request<{ items: UserNotification[]; total: number; unreadCount: number }>(`/notifications${q ? `?${q}` : ''}`);
+    },
+    unreadCount: () => request<{ unreadCount: number }>('/notifications/unread-count'),
+    markAsRead: (id: string) => request<void>(`/notifications/${id}/read`, { method: 'PATCH' }),
+    markAllAsRead: () => request<void>('/notifications/read-all', { method: 'PATCH' }),
+    delete: (id: string) => request<void>(`/notifications/${id}`, { method: 'DELETE' }),
   },
 };
 
@@ -115,6 +184,9 @@ export interface Bug {
   summary: string;
   severity: 'low' | 'medium' | 'high' | 'critical';
   status: string;
+  regressionDetectedAt?: string;
+  assignee?: { id: string; email: string };
+  regressionRelease?: { id: string; version: string };
   createdAt: string;
 }
 
@@ -123,6 +195,12 @@ export interface BugDetail extends Bug {
   stepsToReproduce: string[];
   fixSuggestion: string;
   aiModelVersion: string;
+  aiConfidence?: number;
+  screenshotUrl?: string;
+  regressionDetectedAt?: string;
+  assignee?: { id: string; email: string };
+  regressionRelease?: { id: string; version: string };
+  release?: { id: string; version: string };
   error: {
     message: string;
     stack?: string;
@@ -131,6 +209,107 @@ export interface BugDetail extends Bug {
     id: string;
     occurrenceCount: number;
   };
+}
+
+export interface SimilarBug {
+  id: string;
+  summary: string | null;
+  severity: string | null;
+  status: string;
+  createdAt: string;
+  distance: number;
+}
+
+export interface ClusterMember {
+  id: string;
+  summary: string | null;
+  severity: string | null;
+  status: string;
+  createdAt: string;
+  errorMessage: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  createdAt: string;
+}
+
+export interface ChatThread {
+  id: string;
+  bugId: string;
+  messages: ChatMessage[];
+}
+
+export interface Environment {
+  id: string;
+  project_id: string;
+  name: string;
+  config_version: number;
+  sampling_click: number;
+  sampling_navigation: number;
+  sampling_console: number;
+  sampling_api: number;
+  sampling_error: number;
+  replay_enabled: boolean;
+  screenshot_on_error: boolean;
+  created_at: string;
+}
+
+export interface UpdateEnvironmentDto {
+  sampling_click?: number;
+  sampling_navigation?: number;
+  sampling_console?: number;
+  sampling_api?: number;
+  sampling_error?: number;
+  replay_enabled?: boolean;
+  screenshot_on_error?: boolean;
+}
+
+export interface Release {
+  id: string;
+  project_id: string;
+  version: string;
+  sourcemap: string | null;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface ReleaseSourcemap {
+  id: string;
+  release_id: string;
+  minified_filename: string;
+  declared_file: string | null;
+  sourcemap_size: number | null;
+  content_hash: string | null;
+  sourcemap_parsed: boolean;
+  sourcemap_error: string | null;
+  parse_warnings: string[] | null;
+  uploaded_at: string;
+}
+
+export interface Integration {
+  id: string;
+  project_id: string;
+  provider_id: string;
+  config: Record<string, unknown>;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface UserNotification {
+  id: string;
+  project_id: string;
+  project: { id: string; name: string };
+  bug_id?: string;
+  bug?: { id: string; summary: string };
+  type: string;
+  title: string;
+  body?: string;
+  severity?: 'low' | 'medium' | 'high' | 'critical';
+  read_at?: string;
+  created_at: string;
 }
 
 interface RawBug {

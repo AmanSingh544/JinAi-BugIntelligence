@@ -4,6 +4,7 @@ import Redis from 'ioredis';
 import { REDIS_CLIENT } from '../../shared/redis/redis.provider';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { ClusteringJob, CLUSTERING_QUEUE } from './clustering.queue';
+import { MetricsService } from '../../shared/metrics/metrics.service';
 
 @Injectable()
 export class ClusteringWorker implements OnModuleInit, OnModuleDestroy {
@@ -13,6 +14,7 @@ export class ClusteringWorker implements OnModuleInit, OnModuleDestroy {
   constructor(
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     private readonly prisma: PrismaService,
+    private readonly metrics: MetricsService,
   ) {}
 
   onModuleInit() {
@@ -32,6 +34,7 @@ export class ClusteringWorker implements OnModuleInit, OnModuleDestroy {
   }
 
   private async process(job: Job<ClusteringJob>) {
+    return this.metrics.wrapJob('clustering', async () => {
     const { projectId, errorId, vector } = job.data;
 
     const project = await this.prisma.project.findUnique({ where: { id: projectId } });
@@ -82,5 +85,6 @@ export class ClusteringWorker implements OnModuleInit, OnModuleDestroy {
     });
 
     this.logger.debug(`Cluster ${clusterId} assigned to error ${errorId}`);
+    });
   }
 }

@@ -9,10 +9,20 @@ export function generateId(): string {
 
 let _sessionId: string | null = null;
 
+function getReleaseTag(): string | undefined {
+  const htmlRelease = document?.documentElement?.getAttribute('data-bi-release');
+  if (htmlRelease) return htmlRelease;
+  try {
+    return (window as any).__BI_RELEASE__ as string | undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function getSessionId(): string {
   if (_sessionId) return _sessionId;
   _sessionId = crypto.randomUUID();
-  postToBackground({ type: 'SESSION_INIT', sessionId: _sessionId });
+  postToBackground({ type: 'SESSION_INIT', sessionId: _sessionId, release: getReleaseTag() });
   return _sessionId;
 }
 

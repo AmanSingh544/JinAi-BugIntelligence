@@ -304,3 +304,61 @@ Example rule (create via DB or future Rules API):
 - Nested rule conditions (`any` / `all`)
 - Slack / email notification channel
 - AI debug chat
+
+# --------------------------------------------------------------------------------
+
+# Your `docker-compose.yml` already includes both Prometheus and Grafana. Here is how to access them:
+
+### 1. Start the services
+From the project root (`Extension--`), run:
+
+```powershell
+docker compose up -d
+```
+
+This starts:
+- **Prometheus** on port `9090`
+- **Grafana** on port `3001`
+
+---
+
+### 2. Open the UIs
+
+| Service | URL | Credentials |
+|---------|-----|-------------|
+| **Prometheus** | http://localhost:9090 | No login required |
+| **Grafana** | http://localhost:3001 | `admin` / `admin` |
+
+---
+
+### 3. What to check
+
+**Prometheus**
+- Go to **Status → Targets** (`http://localhost:9090/targets`) to verify the backend scrape target is `UP`.
+- Go to **Graph** to query metrics, e.g.:
+  ```
+  rate(http_requests_total[5m])
+  ```
+
+**Grafana**
+- Your dashboards are provisioned from `./grafana/dashboards/`.
+- Log in with `admin` / `admin`, then browse to **Dashboards** to see them.
+
+---
+
+### 4. If targets are down in Prometheus
+
+Check that your backend is actually exposing metrics. Open this in your browser:
+
+```
+http://localhost:4000/metrics
+```
+
+If that page is blank or errors out, the backend metrics endpoint isn't running, and Prometheus will show the target as `DOWN`.
+
+---
+
+### Note
+Docker does not appear to be installed in this current environment, so you will need to run the `docker compose up -d` command on the machine where you have Docker Desktop installed.
+
+# --------------------------------------------------------

@@ -1,0 +1,32 @@
+{
+  "name": "@bug-intelligence/sourcemap-upload",
+  "version": "1.0.0",
+  "description": "Upload Vite/Webpack build sourcemaps to Bug Intelligence Platform",
+  "main": "bin/cli.js",
+  "bin": {
+    "bi-upload-sourcemaps": "bin/cli.js"
+  },
+  "files": [
+    "bin/",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node bin/cli.js --help"
+  },
+  "keywords": [
+    "bug-intelligence",
+    "sourcemap",
+    "vite",
+    "webpack",
+    "monitoring",
+    "error-tracking"
+  ],
+  "author": "Bug Intelligence",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.17"
+  }
+}

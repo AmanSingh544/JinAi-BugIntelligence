@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Headers,
   HttpCode,
   HttpStatus,
   Post,
@@ -28,7 +29,11 @@ export class IngestController {
 
   @Post('batch')
   @HttpCode(HttpStatus.ACCEPTED)
-  async batch(@Req() req: Request, @Body() dto: BatchEventsDto) {
+  async batch(
+    @Req() req: Request,
+    @Headers('x-bi-environment') envName: string | undefined,
+    @Body() dto: BatchEventsDto,
+  ) {
     const project = req[API_KEY_PROJECT] as { id: string };
 
     await this.rateLimit.checkAndIncrement(project.id);
@@ -44,6 +49,7 @@ export class IngestController {
       projectId: project.id,
       sessionId: dto.sessionId,
       sessionMeta: dto.sessionMeta,
+      environmentName: envName ?? null,
       events,
       receivedAt: Date.now(),
     });

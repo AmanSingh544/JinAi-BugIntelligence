@@ -1,5 +1,6 @@
 import type { ErrorEvent as BugErrorEvent } from '../shared/types';
 import { generateId, getSessionId, sendEvent } from './shared';
+import { flushReplayBuffer } from './replay-tracker';
 
 // Global JS errors
 window.addEventListener('error', (e: globalThis.ErrorEvent) => {
@@ -17,6 +18,8 @@ window.addEventListener('error', (e: globalThis.ErrorEvent) => {
       ...(e.colno ? { column: e.colno } : {}),
     },
   };
+  flushReplayBuffer(true);
+  flushReplayBuffer(true);
   sendEvent(event);
 });
 

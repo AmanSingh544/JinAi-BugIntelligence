@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { Queue } from 'bullmq';
 import Redis from 'ioredis';
 import { REDIS_CLIENT } from '../../shared/redis/redis.provider';
+import { MetricsService } from '../../shared/metrics/metrics.service';
 
 export const CLUSTERING_QUEUE = 'clustering';
 
@@ -15,7 +16,10 @@ export interface ClusteringJob {
 export class ClusteringQueue {
   private readonly queue: Queue<ClusteringJob>;
 
-  constructor(@Inject(REDIS_CLIENT) redis: Redis) {
+  constructor(
+    @Inject(REDIS_CLIENT) redis: Redis,
+    private readonly metrics: MetricsService,
+  ) {
     this.queue = new Queue<ClusteringJob>(CLUSTERING_QUEUE, {
       connection: redis,
       defaultJobOptions: {
@@ -25,6 +29,7 @@ export class ClusteringQueue {
         removeOnFail: 500,
       },
     });
+    this.metrics.registerQueue(this.queue);
   }
 
   async add(data: ClusteringJob) {

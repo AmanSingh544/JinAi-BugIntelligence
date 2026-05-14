@@ -1,10 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { IntegrationProvider, BugReportPayload, JsonValue, TicketResult } from './integration.interface';
+import { externalApiFetch } from '../../../shared/http/external-api-fetch';
+import { readJsonResponse } from '../../../shared/http/read-json-response';
+import { bearerAuth } from '../../../shared/http/auth-helpers';
+import { MERIDIAN_SCHEMA } from './provider.schema';
 
 @Injectable()
 export class MeridianProvider implements IntegrationProvider {
   readonly id = 'meridian_3sc';
   readonly name = '3SC Meridian';
+  readonly schema = MERIDIAN_SCHEMA;
   private readonly logger = new Logger(MeridianProvider.name);
 
   async validateCredentials(config: Record<string, JsonValue>): Promise<boolean> {
@@ -12,11 +17,11 @@ export class MeridianProvider implements IntegrationProvider {
     if (!baseUrl || !apiKey) return false;
 
     try {
-      const res = await fetch(`${baseUrl}/api/v1/health`, {
-        headers: { Authorization: `Bearer ${apiKey}` },
-        signal: AbortSignal.timeout(5000),
+      await externalApiFetch(this.id, {
+        url: `${baseUrl}/api/v1/health`,
+        headers: bearerAuth(apiKey),
       });
-      return res.ok;
+      return true;
     } catch {
       return false;
     }
@@ -43,41 +48,36 @@ export class MeridianProvider implements IntegrationProvider {
       },
     };
 
-    const res = await fetch(`${baseUrl}/api/v1/tickets`, {
+    const res = await externalApiFetch(this.id, {
+      url: `${baseUrl}/api/v1/tickets`,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
+        ...bearerAuth(apiKey),
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(10000),
     });
 
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Meridian API ${res.status}: ${text}`);
-    }
-
-    const data = await res.json() as { id: string; url: string };
+    const data = await readJsonResponse<{ id: string; url: string }>(this.id, res);
     this.logger.log(`Created Meridian ticket ${data.id} for bug ${payload.bugId}`);
     return { ticketId: data.id, url: data.url };
   }
 
   async updateTicket(
     ticketId: string,
-    payload: Partial<BugReportPayload>,
+    _payload: Partial<BugReportPayload>,
     config: Record<string, JsonValue>,
   ): Promise<void> {
     const { baseUrl, apiKey } = config as { baseUrl: string; apiKey: string };
 
-    await fetch(`${baseUrl}/api/v1/tickets/${ticketId}`, {
+    await externalApiFetch(this.id, {
+      url: `${baseUrl}/api/v1/tickets/${ticketId}`,
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
+        ...bearerAuth(apiKey),
       },
       body: JSON.stringify({ status: 'resolved' }),
-      signal: AbortSignal.timeout(10000),
     });
   }
 

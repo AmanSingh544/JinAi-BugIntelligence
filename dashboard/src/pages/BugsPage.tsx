@@ -1,24 +1,37 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { api, type Bug } from '../api';
 
 const SEVERITIES = ['critical', 'high', 'medium', 'low'] as const;
 const STATUSES = ['open', 'dispatched', 'resolved', 'ignored', 'ai_failed'] as const;
+const REGRESSION_FILTERS = [
+  { label: 'All bugs', value: '' },
+  { label: 'Regressions only', value: 'regression' },
+] as const;
 
 export default function BugsPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const [bugs, setBugs] = useState<Bug[]>([]);
   const [severity, setSeverity] = useState('');
   const [status, setStatus] = useState('');
+  const [regression, setRegression] = useState('');
+  const [assignedToMe, setAssignedToMe] = useState(false);
+  const [currentUser, setCurrentUser] = useState<{ id: string; email: string } | null>(null);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    api.auth.me().then(setCurrentUser).catch(() => setCurrentUser(null));
+  }, []);
 
   useEffect(() => {
     if (!projectId) return;
     const params: Record<string, string> = {};
     if (severity) params['severity'] = severity;
     if (status) params['status'] = status;
+    if (regression) params['regression'] = regression;
+    if (assignedToMe && currentUser) params['assignedTo'] = currentUser.id;
     api.bugs.list(projectId, params).then(setBugs).catch((e: unknown) => setError((e as Error).message));
-  }, [projectId, severity, status]);
+  }, [projectId, severity, status, regression, assignedToMe, currentUser]);
 
   return (
     <div style={{ maxWidth: 1000, margin: '0 auto', padding: '32px 16px' }}>
@@ -36,6 +49,17 @@ export default function BugsPage() {
           <option value="">All statuses</option>
           {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
+        <select value={regression} onChange={(e) => setRegression(e.target.value)} style={{ width: 160 }}>
+          {REGRESSION_FILTERS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
+        </select>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={assignedToMe}
+            onChange={(e) => setAssignedToMe(e.target.checked)}
+          />
+          Assigned to me
+        </label>
       </div>
 
       {error && <div style={{ color: '#ef4444', marginBottom: 16 }}>{error}</div>}
@@ -55,8 +79,16 @@ export default function BugsPage() {
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+                  {b.regressionDetectedAt && (
+                    <span className="badge" style={{ background: '#ef4444', color: '#fff' }}>Regression</span>
+                  )}
                   <span className={`badge badge-${b.severity}`}>{b.severity}</span>
                   <span className={`badge badge-${b.status}`}>{b.status}</span>
+                  {b.assignee && (
+                    <span style={{ fontSize: 11, color: 'var(--muted)' }} title={b.assignee.email}>
+                      @{b.assignee.email.split('@')[0]}
+                    </span>
+                  )}
                   <span style={{ fontSize: 11, color: 'var(--muted)' }}>
                     {new Date(b.createdAt).toLocaleDateString()}
                   </span>

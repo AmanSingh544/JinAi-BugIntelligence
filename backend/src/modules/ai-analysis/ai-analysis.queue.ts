@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { Queue } from 'bullmq';
 import Redis from 'ioredis';
 import { REDIS_CLIENT } from '../../shared/redis/redis.provider';
+import { MetricsService } from '../../shared/metrics/metrics.service';
 
 export const AI_ANALYSIS_QUEUE = 'ai-analysis';
 
@@ -10,13 +11,17 @@ export interface AiAnalysisJob {
   sessionId: string;
   errorId: string;
   fingerprint: string;
+  trackingId?: string;
 }
 
 @Injectable()
 export class AiAnalysisQueue {
   private readonly queue: Queue<AiAnalysisJob>;
 
-  constructor(@Inject(REDIS_CLIENT) redis: Redis) {
+  constructor(
+    @Inject(REDIS_CLIENT) redis: Redis,
+    private readonly metrics: MetricsService,
+  ) {
     this.queue = new Queue<AiAnalysisJob>(AI_ANALYSIS_QUEUE, {
       connection: redis,
       defaultJobOptions: {
@@ -26,6 +31,7 @@ export class AiAnalysisQueue {
         removeOnFail: 500,
       },
     });
+    this.metrics.registerQueue(this.queue);
   }
 
   async add(data: AiAnalysisJob) {

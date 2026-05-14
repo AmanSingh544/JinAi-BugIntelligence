@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
-import { SessionsController } from './sessions.controller';
+import { SessionsController, ReplayController } from './sessions.controller';
 
 @Module({
-  controllers: [SessionsController],
+  controllers: [SessionsController, ReplayController],
 })
 export class SessionsModule {}

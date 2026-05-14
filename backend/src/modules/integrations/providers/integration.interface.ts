@@ -1,3 +1,5 @@
+import type { ProviderSchema } from '../../../shared/provider-schema';
+
 export type JsonValue =
   | string | number | boolean | null
   | JsonValue[]
@@ -18,7 +20,7 @@ export interface BugReportPayload {
   affectedUrl: string;
   browser: string;
   timestamp: string;
-  sessionId: string;
+  sessionId: string | null;
 }
 
 export interface TicketResult {
@@ -29,6 +31,7 @@ export interface TicketResult {
 export interface IntegrationProvider {
   readonly id: string;
   readonly name: string;
+  readonly schema?: ProviderSchema;
   validateCredentials(config: Record<string, JsonValue>): Promise<boolean>;
   createTicket(payload: BugReportPayload, config: Record<string, JsonValue>): Promise<TicketResult>;
   updateTicket?(ticketId: string, payload: Partial<BugReportPayload>, config: Record<string, JsonValue>): Promise<void>;

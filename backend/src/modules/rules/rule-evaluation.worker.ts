@@ -4,8 +4,11 @@ import Redis from 'ioredis';
 import { REDIS_CLIENT } from '../../shared/redis/redis.provider';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { DispatchQueue } from '../integrations/dispatch.queue';
+import { NotificationService } from '../notifications/notification.service';
+import { PipelineTrackerService } from '../system/pipeline-tracker.service';
 import { RuleEvaluationJob, RULE_EVALUATION_QUEUE } from './rule-evaluation.queue';
 import { evaluateRule, parseConditions, type Severity } from './rule-evaluator';
+import { MetricsService } from '../../shared/metrics/metrics.service';
 
 const TIME_WINDOW_MINUTES = 60;
 
@@ -18,6 +21,9 @@ export class RuleEvaluationWorker implements OnModuleInit, OnModuleDestroy {
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     private readonly prisma: PrismaService,
     private readonly dispatchQueue: DispatchQueue,
+    private readonly notificationService: NotificationService,
+    private readonly tracker: PipelineTrackerService,
+    private readonly metrics: MetricsService,
   ) {}
 
   onModuleInit() {
@@ -37,13 +43,20 @@ export class RuleEvaluationWorker implements OnModuleInit, OnModuleDestroy {
   }
 
   private async process(job: Job<RuleEvaluationJob>) {
-    const { projectId, bugId, errorId, clusterId, severity } = job.data;
+    return this.metrics.wrapJob('rule-evaluation', async () => {
+    const start = Date.now();
+    const { projectId, bugId, errorId, clusterId, severity, trackingId } = job.data;
+
+    await this.tracker.recordStage(trackingId, 'rule_evaluation');
 
     const rules = await this.prisma.rule.findMany({
       where: { project_id: projectId, is_active: true },
     });
 
-    if (rules.length === 0) return;
+    if (rules.length === 0) {
+      await this.tracker.recordLatency('rule_evaluation', Date.now() - start);
+      return;
+    }
 
     const statusCode = await this.getLastStatusCode(errorId);
     const clusterOccurrences = clusterId ? await this.getClusterOccurrences(clusterId) : 0;
@@ -69,20 +82,24 @@ export class RuleEvaluationWorker implements OnModuleInit, OnModuleDestroy {
       this.logger.log(`Rule ${rule.id} matched for bug ${bugId}, action=${rule.action}`);
 
       if (rule.action === 'auto_dispatch') {
-        await this.triggerDispatch(bugId, projectId);
+        await this.triggerDispatch(bugId, projectId, trackingId);
       } else if (rule.action === 'ignore') {
         await this.prisma.bug.update({ where: { id: bugId }, data: { status: 'ignored' } });
+      } else if (rule.action === 'notify') {
+        void this.notificationService.sendToProject(projectId, bugId);
       }
     }
+    await this.tracker.recordLatency('rule_evaluation', Date.now() - start);
+    });
   }
 
-  private async triggerDispatch(bugId: string, projectId: string) {
+  private async triggerDispatch(bugId: string, projectId: string, trackingId?: string) {
     const integrations = await this.prisma.projectIntegration.findMany({
       where: { project_id: projectId, is_active: true },
     });
 
     for (const integration of integrations) {
-      await this.dispatchQueue.add({ bugId, integrationId: integration.id, attempt: 1 });
+      await this.dispatchQueue.add({ bugId, integrationId: integration.id, attempt: 1, trackingId });
     }
 
     if (integrations.length > 0) {
@@ -101,7 +118,7 @@ export class RuleEvaluationWorker implements OnModuleInit, OnModuleDestroy {
       where: {
         session_id: error.session_id,
         type: 'api_response',
-        timestamp: { lte: error.event.timestamp },
+        timestamp: error.event ? { lte: error.event.timestamp } : undefined,
       },
       orderBy: { timestamp: 'desc' },
     });

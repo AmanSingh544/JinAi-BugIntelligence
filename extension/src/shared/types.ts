@@ -5,7 +5,8 @@ export type EventType =
   | 'api_request'
   | 'api_response'
   | 'error'
-  | 'console';
+  | 'console'
+  | 'replay_snapshot';
 
 export type JsonValue =
   | string
@@ -79,13 +80,21 @@ export interface NavigationEvent extends BaseEvent {
   };
 }
 
+export interface ReplaySnapshotEvent extends BaseEvent {
+  type: 'replay_snapshot';
+  payload: {
+    events: unknown[];
+  };
+}
+
 export type RawEvent =
   | ErrorEvent
   | ApiRequestEvent
   | ApiResponseEvent
   | ClickEvent
   | ConsoleEvent
-  | NavigationEvent;
+  | NavigationEvent
+  | ReplaySnapshotEvent;
 
 export interface ExtensionConfig {
   apiKey: string;
