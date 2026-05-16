@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { api } from '../api';
 import type { UserNotification } from '../api';
+import { useEventSource } from '../hooks/useEventSource';
 
 const SEVERITY_COLORS: Record<string, string> = {
   critical: '#ef4444',
@@ -37,6 +38,14 @@ export default function NotificationBell() {
       // silent fail
     }
   };
+
+  const handleSse = useCallback((msg: { event: string; data: unknown }) => {
+    if (msg.event === 'notification:new') {
+      fetchUnreadCount();
+    }
+  }, []);
+
+  useEventSource(handleSse);
 
   useEffect(() => {
     fetchUnreadCount();

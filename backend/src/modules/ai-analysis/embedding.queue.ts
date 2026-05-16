@@ -22,10 +22,10 @@ export class EmbeddingQueue {
     this.queue = new Queue<EmbeddingJob>(EMBEDDING_QUEUE, {
       connection: redis,
       defaultJobOptions: {
-        attempts: 5,
-        backoff: { type: 'exponential', delay: 2000 },
-        removeOnComplete: 200,
-        removeOnFail: 500,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 5000 },
+        removeOnComplete: 100,
+        removeOnFail: 50,
       },
     });
     metrics.registerQueue(this.queue);

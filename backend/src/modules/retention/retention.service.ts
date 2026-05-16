@@ -28,21 +28,23 @@ export class RetentionService {
         const [
           replayCount,
           eventCount,
+          archiveCount,
           screenshotCount,
           bugDetailCount,
           dlqCount,
         ] = await Promise.all([
           this.cleanupReplay(env.project_id, env.retention_replay_days),
           this.cleanupEvents(env.project_id, env.retention_events_days),
+          this.cleanupEventArchives(env.project_id, env.retention_events_days),
           this.cleanupScreenshots(env.project_id, env.retention_screenshots_days),
           this.cleanupBugDetails(env.project_id, env.retention_bug_detail_days),
           this.cleanupDlq(env.project_id, env.retention_dlq_days),
         ]);
 
-        totalDeleted += replayCount + eventCount + screenshotCount + bugDetailCount + dlqCount;
+        totalDeleted += replayCount + eventCount + archiveCount + screenshotCount + bugDetailCount + dlqCount;
         this.logger.debug(
           `Retention cleanup for project=${project.name} env=${env.name}: ` +
-            `replay=${replayCount}, events=${eventCount}, screenshots=${screenshotCount}, ` +
+            `replay=${replayCount}, events=${eventCount}, eventArchives=${archiveCount}, screenshots=${screenshotCount}, ` +
             `bugDetails=${bugDetailCount}, dlq=${dlqCount}`,
         );
       } catch (err) {
@@ -73,10 +75,32 @@ export class RetentionService {
 
   private async cleanupEvents(projectId: string, days: number): Promise<number> {
     if (days <= 0) return 0;
+
+    // Archive before delete
+    await this.prisma.$executeRaw`
+      INSERT INTO "EventArchive" (id, session_id, project_id, type, timestamp, payload, created_at)
+      SELECT id, session_id, project_id, type, timestamp, payload, created_at
+      FROM "Event"
+      WHERE project_id = ${projectId}::uuid
+        AND created_at < NOW() - INTERVAL '${days} days'
+      ON CONFLICT (id) DO NOTHING
+    `;
+
     const result = await this.prisma.$executeRaw`
       DELETE FROM "Event"
       WHERE project_id = ${projectId}::uuid
         AND created_at < NOW() - INTERVAL '${days} days'
+    `;
+    return Number(result);
+  }
+
+  private async cleanupEventArchives(projectId: string, days: number): Promise<number> {
+    if (days <= 0) return 0;
+    const archiveDays = days * 3;
+    const result = await this.prisma.$executeRaw`
+      DELETE FROM "EventArchive"
+      WHERE project_id = ${projectId}::uuid
+        AND created_at < NOW() - INTERVAL '${archiveDays} days'
     `;
     return Number(result);
   }

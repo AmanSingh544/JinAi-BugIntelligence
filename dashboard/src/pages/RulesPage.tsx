@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { request } from '../api';
+import { useAuth } from '../hooks/useAuth';
 
 interface Rule {
   id: string;
@@ -25,6 +26,7 @@ const ACTIONS = ['auto_dispatch', 'notify', 'ignore'];
 
 export default function RulesPage() {
   const { projectId } = useParams<{ projectId: string }>();
+  const { canManage } = useAuth();
   const [rules, setRules] = useState<Rule[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
@@ -103,9 +105,11 @@ export default function RulesPage() {
     <div style={{ maxWidth: 800, margin: '0 auto', padding: 24 }}>
       <h1 style={{ color: '#e2e8f0', marginBottom: 24 }}>Rules</h1>
 
-      <button onClick={() => setShowAdd(!showAdd)} style={{ marginBottom: 16 }}>
-        {showAdd ? 'Cancel' : '+ Add Rule'}
-      </button>
+      {projectId && canManage(projectId) && (
+        <button onClick={() => setShowAdd(!showAdd)} style={{ marginBottom: 16 }}>
+          {showAdd ? 'Cancel' : '+ Add Rule'}
+        </button>
+      )}
 
       {showAdd && (
         <div className="card" style={{ padding: 20, marginBottom: 24 }}>
@@ -172,10 +176,12 @@ export default function RulesPage() {
                     {r.is_active ? 'Active' : 'Inactive'} · {r.action} · {r.conditions?.operator ?? 'all'} ({r.conditions?.conditions?.length ?? 0} conditions)
                   </div>
                 </div>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button className="secondary" onClick={() => toggleRule(r.id)}>{r.is_active ? 'Pause' : 'Activate'}</button>
-                  <button className="danger" onClick={() => deleteRule(r.id)}>Delete</button>
-                </div>
+                {projectId && canManage(projectId) && (
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button className="secondary" onClick={() => toggleRule(r.id)}>{r.is_active ? 'Pause' : 'Activate'}</button>
+                    <button className="danger" onClick={() => deleteRule(r.id)}>Delete</button>
+                  </div>
+                )}
               </div>
             </div>
           ))}

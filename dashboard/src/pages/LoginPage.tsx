@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { api } from '../api';
 
 export default function LoginPage() {
@@ -18,7 +18,7 @@ export default function LoginPage() {
       const fn = mode === 'login' ? api.auth.login : api.auth.register;
       const res = await fn(email, password);
       localStorage.setItem('token', res.token);
-      nav('/');
+      nav(res.needsOnboarding ? '/onboarding' : '/');
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -43,12 +43,31 @@ export default function LoginPage() {
           <button type="submit" disabled={loading}>
             {loading ? 'Loading…' : mode === 'login' ? 'Sign in' : 'Create account'}
           </button>
+          {mode === 'login' && (
+            <Link to="/forgot-password" style={{ fontSize: 13, textAlign: 'center' }}>
+              Forgot password?
+            </Link>
+          )}
           <button
             type="button" className="secondary"
             onClick={() => setMode(mode === 'login' ? 'register' : 'login')}
           >
             {mode === 'login' ? 'Create account instead' : 'Sign in instead'}
           </button>
+          <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+            <a
+              href={`${import.meta.env.VITE_API_URL ?? 'http://localhost:4000/api/v1'}/auth/google`}
+              style={{ flex: 1, textAlign: 'center', padding: '8px 0', borderRadius: 6, background: '#1a1d27', border: '1px solid var(--border)', textDecoration: 'none', color: 'var(--text)', fontSize: 13 }}
+            >
+              Google
+            </a>
+            <a
+              href={`${import.meta.env.VITE_API_URL ?? 'http://localhost:4000/api/v1'}/auth/github`}
+              style={{ flex: 1, textAlign: 'center', padding: '8px 0', borderRadius: 6, background: '#1a1d27', border: '1px solid var(--border)', textDecoration: 'none', color: 'var(--text)', fontSize: 13 }}
+            >
+              GitHub
+            </a>
+          </div>
         </form>
       </div>
     </div>

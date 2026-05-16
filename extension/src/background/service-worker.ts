@@ -6,6 +6,24 @@ import {
   shouldTrack,
   getRuntimeConfig,
 } from '../shared/runtime-config';
+import { sanitizePayload } from '../shared/sanitize';
+
+// ── Offscreen document for screenshots ────────────────────────────────────────
+
+let offscreenDocumentPath: string | null = null;
+
+async function setupOffscreenDocument(path: string): Promise<void> {
+  if (offscreenDocumentPath === path) return;
+  if (offscreenDocumentPath) {
+    await chrome.offscreen.closeDocument();
+  }
+  offscreenDocumentPath = path;
+  await chrome.offscreen.createDocument({
+    url: chrome.runtime.getURL(path),
+    reasons: ['TESTING' as any],
+    justification: 'Capture visible tab screenshots from a service worker',
+  });
+}
 
 async function captureScreenshot(sessionId: string, expectedTabId?: number): Promise<void> {
   const cfg = getRuntimeConfig();
@@ -24,7 +42,13 @@ async function captureScreenshot(sessionId: string, expectedTabId?: number): Pro
   }
 
   try {
-    const dataUrl = await chrome.tabs.captureVisibleTab({ format: 'jpeg', quality: 70 });
+    await setupOffscreenDocument('offscreen.html');
+    const dataUrl = await chrome.runtime.sendMessage({
+      type: 'capture-screenshot',
+      tabId: expectedTabId,
+    });
+    if (!dataUrl || typeof dataUrl !== 'string') return;
+
     const res = await fetch(dataUrl);
     const blob = await res.blob();
 
@@ -156,7 +180,7 @@ function handleMessage(
       return;
     }
 
-    eventBuffer.push(message.event);
+    eventBuffer.push({ ...message.event, payload: sanitizePayload(message.event.payload) } as RawEvent);
     console.log('[BugIntel] Buffered event type=', message.event.type, 'buffer size=', eventBuffer.length);
     if (eventBuffer.length >= FLUSH_BATCH_SIZE) void flush();
 

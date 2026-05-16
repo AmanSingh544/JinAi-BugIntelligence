@@ -11,6 +11,7 @@ import { RuleEvaluationQueue } from '../rules/rule-evaluation.queue';
 import { PipelineTrackerService } from '../system/pipeline-tracker.service';
 import { UserNotificationsService } from '../user-notifications/user-notifications.service';
 import { MetricsService } from '../../shared/metrics/metrics.service';
+import { EventsSseService } from '../events/events-sse.service';
 import type { Prisma } from '@prisma/client';
 
 const AI_CACHE_PREFIX = 'ai:result:';
@@ -45,6 +46,7 @@ export class AiAnalysisWorker implements OnModuleInit, OnModuleDestroy {
     private readonly notifications: UserNotificationsService,
     private readonly config: ConfigService,
     private readonly metrics: MetricsService,
+    private readonly sse: EventsSseService,
   ) {
     this.ai = new OpenAI({
       apiKey: this.config.get<string>('AI_API_KEY') ?? '',
@@ -225,6 +227,16 @@ export class AiAnalysisWorker implements OnModuleInit, OnModuleDestroy {
       }
 
       this.logger.log(`Bug created id=${bug.id} cluster=${clusterId} severity=${result.severity} model=${modelVersion}`);
+
+      // Broadcast new bug event
+      const project = await this.prisma.project.findUnique({ where: { id: projectId }, select: { tenant_id: true } });
+      if (project) {
+        this.sse.broadcast(
+          { event: 'bug:new', data: { bugId: bug.id, projectId, summary: result.summary ?? 'New bug' } },
+          (client) => client.tenantId === project.tenant_id,
+        );
+      }
+
       await this.tracker.recordStage(trackingId, 'completed', { bugId: bug.id, errorId });
       await this.tracker.recordLatency('ai_analysis', Date.now() - start);
 

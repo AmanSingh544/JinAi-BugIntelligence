@@ -33,16 +33,33 @@ export async function request<T>(path: string, options?: RequestInit): Promise<T
 export const api = {
   auth: {
     login: (email: string, password: string) =>
-      request<{ token: string }>('/auth/login', {
+      request<{ token: string; needsOnboarding: boolean }>('/auth/login', {
         method: 'POST',
         body: JSON.stringify({ email, password }),
       }),
     register: (email: string, password: string) =>
-      request<{ token: string }>('/auth/register', {
+      request<{ token: string; needsOnboarding: boolean }>('/auth/register', {
         method: 'POST',
         body: JSON.stringify({ email, password }),
       }),
-    me: () => request<{ id: string; email: string }>('/auth/me'),
+    me: () => request<{ id: string; email: string; emailVerified: boolean; memberships: { tenantId: string; role: string; projectIds: string[] }[] }>('/auth/me'),
+    forgotPassword: (email: string) =>
+      request<{ message: string }>('/auth/forgot-password', {
+        method: 'POST',
+        body: JSON.stringify({ email }),
+      }),
+    resetPassword: (token: string, newPassword: string) =>
+      request<{ message: string }>('/auth/reset-password', {
+        method: 'POST',
+        body: JSON.stringify({ token, newPassword }),
+      }),
+    verifyEmail: (token: string) =>
+      request<{ message: string }>('/auth/verify-email', {
+        method: 'POST',
+        body: JSON.stringify({ token }),
+      }),
+    resendVerification: () =>
+      request<{ message: string }>('/auth/resend-verification', { method: 'POST' }),
   },
 
   projects: {
@@ -56,27 +73,42 @@ export const api = {
   },
 
   sessions: {
-    list: (projectId: string) =>
-      request<RawSession[]>(`/projects/${projectId}/sessions`).then((rows) =>
-        rows.map((r) => ({
+    list: (projectId: string, page = 1, limit = 20) =>
+      request<{ items: RawSession[]; total: number }>(`/projects/${projectId}/sessions?page=${page}&limit=${limit}`).then((res) => ({
+        items: res.items.map((r) => ({
           id: r.id,
           projectId: r.project_id,
           startedAt: r.started_at,
           endedAt: r.ended_at,
           userAgent: r.user_agent,
           initialUrl: r.initial_url,
-        } as Session))
-      ),
+        } as Session)),
+        total: res.total,
+      })),
     replay: (projectId: string, sessionId: string) =>
       request<{ events: unknown[] }>(`/projects/${projectId}/sessions/${sessionId}/replay`),
+    timeline: (projectId: string, sessionId: string, limit = 200) =>
+      request<{ events: TimelineEvent[] }>(`/projects/${projectId}/sessions/${sessionId}/timeline?limit=${limit}`),
   },
 
   bugs: {
-    list: (projectId: string, params?: { status?: string; severity?: string }) => {
-      const q = new URLSearchParams(params as Record<string, string>).toString();
-      return request<RawBug[]>(`/projects/${projectId}/bugs${q ? `?${q}` : ''}`).then((rows) =>
-        rows.map(mapBug)
-      );
+    list: (projectId: string, params?: Record<string, string | string[] | number | undefined>) => {
+      const q = new URLSearchParams();
+      if (params) {
+        for (const [key, value] of Object.entries(params)) {
+          if (value === undefined) continue;
+          if (Array.isArray(value)) {
+            for (const v of value) q.append(key, String(v));
+          } else {
+            q.set(key, String(value));
+          }
+        }
+      }
+      const qs = q.toString();
+      return request<{ items: RawBug[]; total: number }>(`/projects/${projectId}/bugs${qs ? `?${qs}` : ''}`).then((res) => ({
+        items: res.items.map(mapBug),
+        total: res.total,
+      }));
     },
     get: (projectId: string, bugId: string) =>
       request<RawBugDetail>(`/projects/${projectId}/bugs/${bugId}`).then(mapBugDetail),
@@ -90,6 +122,18 @@ export const api = {
         method: 'PATCH',
         body: JSON.stringify({ userId }),
       }).then(mapBug),
+    bulkStatus: (projectId: string, bugIds: string[], status: string) =>
+      request<{ updated: number }>(`/projects/${projectId}/bugs/bulk-status`, {
+        method: 'POST',
+        body: JSON.stringify({ bugIds, status }),
+      }),
+    archiveOld: (projectId: string, daysOld?: number) =>
+      request<{ jobId: string; message: string }>(`/projects/${projectId}/bugs/archive-old`, {
+        method: 'POST',
+        body: JSON.stringify({ daysOld }),
+      }),
+    unarchive: (projectId: string, bugId: string) =>
+      request<RawBug>(`/projects/${projectId}/bugs/${bugId}/unarchive`, { method: 'POST' }).then(mapBug),
     similar: (projectId: string, bugId: string) =>
       request<{ similar: SimilarBug[] }>(`/projects/${projectId}/bugs/${bugId}/similar`),
     clusterMembers: (projectId: string, bugId: string) =>
@@ -115,7 +159,11 @@ export const api = {
   },
 
   releases: {
-    list: (projectId: string) => request<Release[]>(`/projects/${projectId}/releases`),
+    list: (projectId: string, page = 1, limit = 20) =>
+      request<{ items: Release[]; total: number }>(`/projects/${projectId}/releases?page=${page}&limit=${limit}`).then((res) => ({
+        items: res.items,
+        total: res.total,
+      })),
     create: (projectId: string, body: { version: string; metadata?: Record<string, unknown> }) =>
       request<Release>(`/projects/${projectId}/releases`, {
         method: 'POST',
@@ -137,6 +185,15 @@ export const api = {
     validate: (projectId: string, id: string) =>
       request<{ valid: boolean; error?: string }>(`/projects/${projectId}/integrations/${id}/validate`, { method: 'POST' }),
     providers: () => request<ProviderSchema[]>('/integrations/providers'),
+  },
+
+  clusters: {
+    list: (projectId: string) =>
+      request<{ clusters: Cluster[] }>(`/projects/${projectId}/clusters`),
+    detail: (projectId: string, clusterId: string, days?: number) =>
+      request<{ cluster: ClusterDetail; bugs: ClusterBug[]; trend: TrendPoint[] }>(
+        `/projects/${projectId}/clusters/${clusterId}${days ? `?days=${days}` : ''}`
+      ),
   },
 
   notifications: {
@@ -187,6 +244,7 @@ export interface Bug {
   regressionDetectedAt?: string;
   assignee?: { id: string; email: string };
   regressionRelease?: { id: string; version: string };
+  archivedAt?: string;
   createdAt: string;
 }
 
@@ -201,6 +259,7 @@ export interface BugDetail extends Bug {
   assignee?: { id: string; email: string };
   regressionRelease?: { id: string; version: string };
   release?: { id: string; version: string };
+  archivedAt?: string;
   error: {
     message: string;
     stack?: string;
@@ -227,6 +286,45 @@ export interface ClusterMember {
   status: string;
   createdAt: string;
   errorMessage: string;
+}
+
+export interface Cluster {
+  id: string;
+  occurrenceCount: number;
+  lastSeenAt: string;
+  createdAt: string;
+  bug?: { id: string; summary: string | null; severity: string | null; status: string };
+  uniqueSessions: number;
+}
+
+export interface ClusterDetail {
+  id: string;
+  occurrenceCount: number;
+  lastSeenAt: string;
+  createdAt: string;
+  bug?: { id: string; summary: string | null; severity: string | null; status: string };
+}
+
+export interface ClusterBug {
+  id: string;
+  summary: string | null;
+  severity: string | null;
+  status: string;
+  createdAt: string;
+  errorMessage: string;
+}
+
+export interface TrendPoint {
+  date: string;
+  count: number;
+}
+
+export interface TimelineEvent {
+  id: string;
+  type: string;
+  timestamp: number;
+  url: string;
+  payload: Record<string, unknown>;
 }
 
 export interface ChatMessage {
@@ -319,6 +417,7 @@ interface RawBug {
   summary: string;
   severity: 'low' | 'medium' | 'high' | 'critical';
   status: string;
+  archived_at?: string;
   created_at: string;
 }
 
@@ -339,6 +438,7 @@ function mapBug(r: RawBug): Bug {
     summary: r.summary,
     severity: r.severity,
     status: r.status,
+    archivedAt: r.archived_at,
     createdAt: r.created_at,
   };
 }

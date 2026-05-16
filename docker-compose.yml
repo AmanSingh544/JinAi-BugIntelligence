@@ -44,6 +44,8 @@ services:
       - AI_API_KEY=${AI_API_KEY}
       - AI_BASE_URL=${AI_BASE_URL}
       - AI_MODELS=${AI_MODELS}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:5173}
+      - DASHBOARD_URL=${DASHBOARD_URL:-http://localhost:5173}
     depends_on:
       postgres:
         condition: service_healthy

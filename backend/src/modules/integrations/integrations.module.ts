@@ -8,9 +8,10 @@ import { GitHubProvider } from './providers/github.provider';
 import { GenericHttpProvider } from './providers/generic-http.provider';
 import { IntegrationsController, IntegrationProvidersController } from './integrations.controller';
 import { PipelineModule } from '../system/pipeline.module';
+import { AuditModule } from '../audit/audit.module';
 
 @Module({
-  imports: [PipelineModule],
+  imports: [PipelineModule, AuditModule],
   providers: [
     DispatchQueue,
     DispatchWorker,

@@ -60,7 +60,16 @@ model User {
   id            String    @id @default(uuid()) @db.Uuid
   email         String    @unique
   password_hash String
+  email_verified Boolean  @default(false)
+  verification_token_hash String? @unique
+  verification_token_expires_at DateTime? @db.Timestamptz
+  reset_token_hash String? @unique
+  reset_token_expires_at DateTime? @db.Timestamptz
+  oauth_provider String?
+  oauth_id       String?
   created_at    DateTime  @default(now()) @db.Timestamptz
+
+  @@unique([oauth_provider, oauth_id])
 
   notifications UserNotification[]
   assigned_bugs Bug[]
@@ -121,12 +130,38 @@ model Event {
   type       String
   timestamp  BigInt
   payload    Json
+  created_at DateTime @default(now()) @db.Timestamptz
 
   session  Session  @relation(fields: [session_id], references: [id], onDelete: Cascade)
   project  Project  @relation(fields: [project_id], references: [id], onDelete: Cascade)
   error    Error?
 
   @@index([project_id, session_id, timestamp])
+}
+
+model EventArchive {
+  id         String   @id @default(uuid()) @db.Uuid
+  session_id String   @db.Uuid
+  project_id String   @db.Uuid
+  type       String
+  timestamp  BigInt
+  payload    Json
+  created_at DateTime @db.Timestamptz
+
+  @@index([project_id, session_id, timestamp])
+  @@index([created_at])
+}
+
+model EmbeddingFailure {
+  id         String   @id @default(uuid()) @db.Uuid
+  error_id   String   @db.Uuid
+  text       String
+  error      String
+  attempts   Int
+  created_at DateTime @default(now()) @db.Timestamptz
+
+  @@index([error_id])
+  @@index([created_at])
 }
 
 model Error {
@@ -191,6 +226,7 @@ model Bug {
   regression_detected_at DateTime? @db.Timestamptz
   assigned_to         String?   @db.Uuid
   regression_release_id String? @db.Uuid
+  archived_at         DateTime? @db.Timestamptz
   created_at          DateTime @default(now()) @db.Timestamptz
 
   project Project @relation(fields: [project_id], references: [id], onDelete: Cascade)
@@ -208,6 +244,7 @@ model Bug {
   chat_thread      ChatThread?
 
   @@index([project_id, status, created_at(sort: Desc)])
+  @@index([project_id, archived_at, created_at(sort: Desc)])
 }
 
 model AiPromptVersion {

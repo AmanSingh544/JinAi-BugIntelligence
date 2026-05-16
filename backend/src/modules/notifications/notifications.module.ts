@@ -7,8 +7,10 @@ import { NotificationRegistry } from './providers/notification.registry';
 import { SlackProvider } from './providers/slack.provider';
 import { EmailProvider } from './providers/email.provider';
 import { TeamsProvider } from './providers/teams.provider';
+import { AuditModule } from '../audit/audit.module';
 
 @Module({
+  imports: [AuditModule],
   providers: [
     NotificationService,
     NotificationQueue,

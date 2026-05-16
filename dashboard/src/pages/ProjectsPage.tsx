@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { api, type Project } from '../api';
 
 export default function ProjectsPage() {
@@ -9,12 +9,18 @@ export default function ProjectsPage() {
   const [creating, setCreating] = useState(false);
   const [newKey, setNewKey] = useState('');
   const [error, setError] = useState('');
+  const nav = useNavigate();
 
   useEffect(() => { void load(); }, []);
 
   async function load() {
     try {
-      setProjects(await api.projects.list());
+      const list = await api.projects.list();
+      if (list.length === 0) {
+        nav('/onboarding', { replace: true });
+        return;
+      }
+      setProjects(list);
     } catch (err) {
       setError((err as Error).message);
     }

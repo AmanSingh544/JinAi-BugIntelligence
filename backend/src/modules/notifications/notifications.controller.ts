@@ -17,6 +17,7 @@ import { CurrentTenant } from '../../shared/tenant/current-tenant.decorator';
 import type { TenantContext } from '../../shared/tenant/tenant-context';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { AuthorizationService } from '../auth/authorization.service';
+import { AuditService } from '../audit/audit.service';
 import { NotificationRegistry } from './providers/notification.registry';
 import { NotificationService } from './notification.service';
 
@@ -30,6 +31,7 @@ export class NotificationsController {
     private readonly registry: NotificationRegistry,
     private readonly notificationService: NotificationService,
     private readonly authz: AuthorizationService,
+    private readonly audit: AuditService,
   ) {}
 
   @Get()
@@ -50,7 +52,7 @@ export class NotificationsController {
     if (!(await this.authz.canManageProject(userId, projectId))) {
       throw new ForbiddenException('You do not have permission to create notification channels in this project');
     }
-    return this.prisma.notificationChannel.create({
+    const channel = await this.prisma.notificationChannel.create({
       data: {
         project_id: projectId,
         provider_id: body.provider_id,
@@ -59,6 +61,15 @@ export class NotificationsController {
         is_active: body.is_active ?? true,
       },
     });
+    await this.audit.log({
+      tenantId: tenant.tenantId,
+      actorId: userId,
+      action: 'channel_created',
+      entityType: 'notification_channel',
+      entityId: channel.id,
+      metadata: { projectId, providerId: body.provider_id, name: body.name },
+    });
+    return channel;
   }
 
   @Delete(':id')
@@ -71,7 +82,15 @@ export class NotificationsController {
     if (!(await this.authz.canManageProject(userId, projectId))) {
       throw new ForbiddenException('You do not have permission to delete notification channels in this project');
     }
-    await this.prisma.notificationChannel.delete({ where: { id } });
+    await this.prisma.notificationChannel.delete({ where: { id, project_id: projectId } });
+    await this.audit.log({
+      tenantId: tenant.tenantId,
+      actorId: userId,
+      action: 'channel_deleted',
+      entityType: 'notification_channel',
+      entityId: id,
+      metadata: { projectId },
+    });
     return { deleted: true };
   }
 
@@ -86,14 +105,23 @@ export class NotificationsController {
     if (!(await this.authz.canManageProject(userId, projectId))) {
       throw new ForbiddenException('You do not have permission to update notification channels in this project');
     }
-    return this.prisma.notificationChannel.update({
-      where: { id },
+    const updated = await this.prisma.notificationChannel.update({
+      where: { id, project_id: projectId },
       data: {
         ...(body.name !== undefined && { name: body.name }),
         ...(body.config !== undefined && { config: body.config as object }),
         ...(body.is_active !== undefined && { is_active: body.is_active }),
       },
     });
+    await this.audit.log({
+      tenantId: tenant.tenantId,
+      actorId: userId,
+      action: 'channel_updated',
+      entityType: 'notification_channel',
+      entityId: id,
+      metadata: { projectId, changes: Object.keys(body) },
+    });
+    return updated;
   }
 
   @Post(':id/test')
@@ -106,7 +134,7 @@ export class NotificationsController {
     if (!(await this.authz.canManageProject(userId, projectId))) {
       throw new ForbiddenException('You do not have permission to test notification channels in this project');
     }
-    const channel = await this.prisma.notificationChannel.findUnique({ where: { id } });
+    const channel = await this.prisma.notificationChannel.findUnique({ where: { id, project_id: projectId } });
     if (!channel) return { success: false, error: 'Channel not found' };
 
     const provider = this.registry.get(channel.provider_id);

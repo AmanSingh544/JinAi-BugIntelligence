@@ -16,6 +16,7 @@ import { CurrentUser } from '../../shared/decorators/current-user.decorator';
 import { CurrentTenant } from '../../shared/tenant/current-tenant.decorator';
 import type { TenantContext } from '../../shared/tenant/tenant-context';
 import { PrismaService } from '../../shared/prisma/prisma.service';
+import { AuditService } from '../audit/audit.service';
 import { AuthorizationService } from '../auth/authorization.service';
 
 @ApiTags('rules')
@@ -26,6 +27,7 @@ export class RulesController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly authz: AuthorizationService,
+    private readonly audit: AuditService,
   ) {}
 
   @Get()
@@ -46,7 +48,7 @@ export class RulesController {
     if (!(await this.authz.canManageProject(userId, projectId))) {
       throw new ForbiddenException('You do not have permission to create rules in this project');
     }
-    return this.prisma.rule.create({
+    const rule = await this.prisma.rule.create({
       data: {
         project_id: projectId,
         name: body.name,
@@ -55,11 +57,20 @@ export class RulesController {
         is_active: body.is_active ?? true,
       },
     });
+    await this.audit.log({
+      tenantId: tenant.tenantId,
+      actorId: userId,
+      action: 'rule_created',
+      entityType: 'rule',
+      entityId: rule.id,
+      metadata: { projectId, name: body.name, action: body.action },
+    });
+    return rule;
   }
 
   @Get(':id')
-  async findOne(@Param('projectId') _projectId: string, @Param('id') id: string) {
-    return this.prisma.rule.findUnique({ where: { id } });
+  async findOne(@Param('projectId') projectId: string, @Param('id') id: string) {
+    return this.prisma.rule.findUnique({ where: { id, project_id: projectId } });
   }
 
   @Patch(':id')
@@ -79,7 +90,16 @@ export class RulesController {
     if (body.action !== undefined) data.action = body.action;
     if (body.is_active !== undefined) data.is_active = body.is_active;
 
-    return this.prisma.rule.update({ where: { id }, data });
+    const updated = await this.prisma.rule.update({ where: { id }, data });
+    await this.audit.log({
+      tenantId: tenant.tenantId,
+      actorId: userId,
+      action: 'rule_updated',
+      entityType: 'rule',
+      entityId: id,
+      metadata: { projectId, changes: Object.keys(data) },
+    });
+    return updated;
   }
 
   @Delete(':id')
@@ -93,6 +113,14 @@ export class RulesController {
       throw new ForbiddenException('You do not have permission to delete rules in this project');
     }
     await this.prisma.rule.delete({ where: { id } });
+    await this.audit.log({
+      tenantId: tenant.tenantId,
+      actorId: userId,
+      action: 'rule_deleted',
+      entityType: 'rule',
+      entityId: id,
+      metadata: { projectId },
+    });
     return { deleted: true };
   }
 
@@ -108,9 +136,18 @@ export class RulesController {
     }
     const rule = await this.prisma.rule.findUnique({ where: { id } });
     if (!rule) return { error: 'Rule not found' };
-    return this.prisma.rule.update({
+    const toggled = await this.prisma.rule.update({
       where: { id },
       data: { is_active: !rule.is_active },
     });
+    await this.audit.log({
+      tenantId: tenant.tenantId,
+      actorId: userId,
+      action: toggled.is_active ? 'rule_activated' : 'rule_paused',
+      entityType: 'rule',
+      entityId: id,
+      metadata: { projectId },
+    });
+    return toggled;
   }
 }

@@ -1,12 +1,15 @@
 import { useEffect, useState, useRef } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { api, type BugDetail, type SimilarBug, type ClusterMember, type ChatMessage } from '../api';
+import { useAuth } from '../hooks/useAuth';
+import SessionTimeline from '../components/SessionTimeline';
 import rrwebPlayer from 'rrweb-player';
 import 'rrweb-player/dist/style.css';
 
 export default function BugDetailPage() {
   const { projectId, bugId } = useParams<{ projectId: string; bugId: string }>();
   const nav = useNavigate();
+  const { canManage, canAssign, canResolve } = useAuth();
   const [bug, setBug] = useState<BugDetail | null>(null);
   const [error, setError] = useState('');
   const [updating, setUpdating] = useState(false);
@@ -122,6 +125,9 @@ export default function BugDetailPage() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
           <h1 style={{ fontSize: 18, fontWeight: 700, flex: 1, marginRight: 16 }}>{bug.summary}</h1>
           <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+            {bug.archivedAt && (
+              <span className="badge" style={{ background: '#64748b', color: '#fff' }}>Archived</span>
+            )}
             {bug.regressionDetectedAt && (
               <span className="badge" style={{ background: '#ef4444', color: '#fff' }}>Regression</span>
             )}
@@ -220,6 +226,14 @@ export default function BugDetailPage() {
           </div>
         )}
       </div>
+
+      {/* Session Timeline */}
+      {bug.sessionId && projectId && (
+        <div className="card" style={{ marginBottom: 20 }}>
+          <h2 style={{ fontSize: 15, fontWeight: 600, marginBottom: 12 }}>Session Timeline</h2>
+          <SessionTimeline projectId={projectId} sessionId={bug.sessionId} />
+        </div>
+      )}
 
       {/* Error details */}
       <div className="card" style={{ marginBottom: 20 }}>
@@ -393,22 +407,22 @@ export default function BugDetailPage() {
       <div className="card">
         <h2 style={{ fontSize: 15, fontWeight: 600, marginBottom: 12 }}>Actions</h2>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          {bug.status !== 'resolved' && (
+          {projectId && canResolve(projectId) && bug.status !== 'resolved' && (
             <button onClick={() => void setStatus('resolved')} disabled={updating}>
               Mark Resolved
             </button>
           )}
-          {bug.status !== 'ignored' && (
+          {projectId && canResolve(projectId) && bug.status !== 'ignored' && (
             <button className="secondary" onClick={() => void setStatus('ignored')} disabled={updating}>
               Ignore
             </button>
           )}
-          {bug.status === 'open' && (
+          {projectId && canResolve(projectId) && bug.status === 'open' && (
             <button className="secondary" onClick={() => void setStatus('dispatched')} disabled={updating}>
               Dispatch
             </button>
           )}
-          {currentUser && !bug.assignee && (
+          {projectId && canAssign(projectId) && currentUser && !bug.assignee && (
             <button
               className="secondary"
               onClick={async () => {
@@ -426,6 +440,26 @@ export default function BugDetailPage() {
               disabled={updating}
             >
               Assign to me
+            </button>
+          )}
+          {projectId && canManage(projectId) && bug.archivedAt && (
+            <button
+              className="secondary"
+              onClick={async () => {
+                if (!projectId || !bugId) return;
+                setUpdating(true);
+                try {
+                  const updated = await api.bugs.unarchive(projectId, bugId);
+                  setBug((b) => b ? { ...b, archivedAt: updated.archivedAt, status: updated.status } : b);
+                } catch (err) {
+                  setError((err as Error).message);
+                } finally {
+                  setUpdating(false);
+                }
+              }}
+              disabled={updating}
+            >
+              Unarchive
             </button>
           )}
           <button className="secondary" onClick={() => nav(-1)}>Back</button>

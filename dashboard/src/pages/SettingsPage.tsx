@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { api, request, type Environment } from '../api';
+import { useAuth } from '../hooks/useAuth';
 
 type Channel = { id: string; provider_id: string; name: string; is_active: boolean };
 
@@ -28,6 +29,7 @@ function getDefaultConfig(provider: string): Record<string, string> {
 
 export default function SettingsPage() {
   const { projectId } = useParams<{ projectId: string }>();
+  const { canManage } = useAuth();
   const [envs, setEnvs] = useState<Environment[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [loading, setLoading] = useState(true);
@@ -153,9 +155,11 @@ export default function SettingsPage() {
       </div>
 
       <h2 style={{ color: '#e2e8f0', marginBottom: 16 }}>Notification Channels</h2>
-      <button onClick={() => setShowChannelForm(!showChannelForm)} style={{ marginBottom: 16 }}>
-        {showChannelForm ? 'Cancel' : '+ Add Channel'}
-      </button>
+      {projectId && canManage(projectId) && (
+        <button onClick={() => setShowChannelForm(!showChannelForm)} style={{ marginBottom: 16 }}>
+          {showChannelForm ? 'Cancel' : '+ Add Channel'}
+        </button>
+      )}
 
       {showChannelForm && (
         <div className="card" style={{ padding: 20, marginBottom: 24 }}>
@@ -183,7 +187,7 @@ export default function SettingsPage() {
               />
             </div>
           ))}
-          <button onClick={addChannel}>Save Channel</button>
+          {projectId && canManage(projectId) && <button onClick={addChannel}>Save Channel</button>}
         </div>
       )}
 
@@ -198,18 +202,51 @@ export default function SettingsPage() {
                 <div style={{ fontSize: 12, color: '#64748b' }}>{ch.provider_id} · {ch.is_active ? 'Active' : 'Inactive'}</div>
               </div>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <ToggleField
-                  label="Active"
-                  value={ch.is_active}
-                  onChange={() => toggleChannelActive(ch.id, ch.is_active)}
-                />
-                <button className="secondary" onClick={() => testChannel(ch.id)}>Test</button>
-                <button className="danger" onClick={() => deleteChannel(ch.id)}>Delete</button>
+                {projectId && canManage(projectId) && (
+                  <>
+                    <ToggleField
+                      label="Active"
+                      value={ch.is_active}
+                      onChange={() => toggleChannelActive(ch.id, ch.is_active)}
+                    />
+                    <button className="secondary" onClick={() => testChannel(ch.id)}>Test</button>
+                    <button className="danger" onClick={() => deleteChannel(ch.id)}>Delete</button>
+                  </>
+                )}
               </div>
             </div>
           ))}
         </div>
       )}
+
+      <h2 style={{ color: '#e2e8f0', marginBottom: 16 }}>Data Retention</h2>
+      <div className="card" style={{ marginBottom: 32, padding: 20 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <div style={{ fontWeight: 600, color: '#e2e8f0', marginBottom: 4 }}>Archive Old Bugs</div>
+            <div style={{ fontSize: 12, color: '#64748b' }}>
+              Move resolved/ignored bugs older than 90 days to cold storage. They will be hidden from default views but can be restored.
+            </div>
+          </div>
+          {projectId && canManage(projectId) && (
+            <button
+              className="secondary"
+              onClick={async () => {
+                if (!projectId) return;
+                if (!window.confirm('Archive resolved/ignored bugs older than 90 days?')) return;
+                try {
+                  const res = await api.bugs.archiveOld(projectId);
+                  alert(res.message + ' (Job ID: ' + res.jobId + ')');
+                } catch (err) {
+                  alert('Failed: ' + (err as Error).message);
+                }
+              }}
+            >
+              Archive Now
+            </button>
+          )}
+        </div>
+      </div>
 
       <h2 style={{ color: '#e2e8f0', marginBottom: 16 }}>Environments</h2>
       {envs.map((env) => (
@@ -225,13 +262,13 @@ export default function SettingsPage() {
                 label="Replay Enabled"
                 value={env.replay_enabled}
                 onChange={(v) => updateEnv(env.id, { replay_enabled: v })}
-                disabled={saving[env.id]}
+                disabled={saving[env.id] || (projectId ? !canManage(projectId) : true)}
               />
               <ToggleField
                 label="Screenshot on Error"
                 value={env.screenshot_on_error}
                 onChange={(v) => updateEnv(env.id, { screenshot_on_error: v })}
-                disabled={saving[env.id]}
+                disabled={saving[env.id] || (projectId ? !canManage(projectId) : true)}
               />
             </div>
 
@@ -241,31 +278,31 @@ export default function SettingsPage() {
                 label="Click"
                 value={env.sampling_click}
                 onChange={(v) => updateEnv(env.id, { sampling_click: v })}
-                disabled={saving[env.id]}
+                disabled={saving[env.id] || (projectId ? !canManage(projectId) : true)}
               />
               <SamplingField
                 label="Navigation"
                 value={env.sampling_navigation}
                 onChange={(v) => updateEnv(env.id, { sampling_navigation: v })}
-                disabled={saving[env.id]}
+                disabled={saving[env.id] || (projectId ? !canManage(projectId) : true)}
               />
               <SamplingField
                 label="Console"
                 value={env.sampling_console}
                 onChange={(v) => updateEnv(env.id, { sampling_console: v })}
-                disabled={saving[env.id]}
+                disabled={saving[env.id] || (projectId ? !canManage(projectId) : true)}
               />
               <SamplingField
                 label="API"
                 value={env.sampling_api}
                 onChange={(v) => updateEnv(env.id, { sampling_api: v })}
-                disabled={saving[env.id]}
+                disabled={saving[env.id] || (projectId ? !canManage(projectId) : true)}
               />
               <SamplingField
                 label="Error"
                 value={env.sampling_error}
                 onChange={(v) => updateEnv(env.id, { sampling_error: v })}
-                disabled={saving[env.id]}
+                disabled={saving[env.id] || (projectId ? !canManage(projectId) : true)}
               />
             </div>
           </div>

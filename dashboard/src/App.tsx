@@ -1,6 +1,11 @@
-import React from 'react';
-import { BrowserRouter, Routes, Route, Navigate, useParams, useLocation, Link } from 'react-router-dom';
+import React, { useEffect } from 'react';
+import { BrowserRouter, Routes, Route, Navigate, useParams, useLocation, Link, useSearchParams } from 'react-router-dom';
+import { AuthProvider } from './hooks/useAuth';
 import LoginPage from './pages/LoginPage';
+import VerifyEmailBanner from './components/VerifyEmailBanner';
+import ForgotPasswordPage from './pages/ForgotPasswordPage';
+import ResetPasswordPage from './pages/ResetPasswordPage';
+import VerifyEmailPage from './pages/VerifyEmailPage';
 import ProjectsPage from './pages/ProjectsPage';
 import SessionsPage from './pages/SessionsPage';
 import BugsPage from './pages/BugsPage';
@@ -10,6 +15,10 @@ import ReleasesPage from './pages/ReleasesPage';
 import IntegrationsPage from './pages/IntegrationsPage';
 import RulesPage from './pages/RulesPage';
 import SystemHealthPage from './pages/SystemHealthPage';
+import OverviewPage from './pages/OverviewPage';
+import ActivityFeedPage from './pages/ActivityFeedPage';
+import OnboardingPage from './pages/OnboardingPage';
+import ClustersPage from './pages/ClustersPage';
 import NotificationBell from './components/NotificationBell';
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -17,12 +26,32 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
   return token ? <>{children}</> : <Navigate to="/login" replace />;
 }
 
+function OAuthTokenHandler() {
+  const [params] = useSearchParams();
+  const token = params.get('token');
+  useEffect(() => {
+    if (token) {
+      localStorage.setItem('token', token);
+      window.location.replace('/');
+    }
+  }, [token]);
+  return null;
+}
+
 export default function App() {
   return (
+    <AuthProvider>
     <BrowserRouter>
+      <OAuthTokenHandler />
+      <VerifyEmailBanner />
       <Routes>
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+        <Route path="/reset-password" element={<ResetPasswordPage />} />
+        <Route path="/verify-email" element={<VerifyEmailPage />} />
+        <Route path="/onboarding" element={<RequireAuth><OnboardingPage /></RequireAuth>} />
         <Route path="/" element={<RequireAuth><ProjectsPage /></RequireAuth>} />
+        <Route path="/projects/:projectId/overview" element={<RequireAuth><ProjectLayout><OverviewPage /></ProjectLayout></RequireAuth>} />
         <Route path="/projects/:projectId/sessions" element={<RequireAuth><ProjectLayout><SessionsPage /></ProjectLayout></RequireAuth>} />
         <Route path="/projects/:projectId/bugs" element={<RequireAuth><ProjectLayout><BugsPage /></ProjectLayout></RequireAuth>} />
         <Route path="/projects/:projectId/bugs/:bugId" element={<RequireAuth><ProjectLayout><BugDetailPage /></ProjectLayout></RequireAuth>} />
@@ -30,10 +59,13 @@ export default function App() {
         <Route path="/projects/:projectId/releases" element={<RequireAuth><ProjectLayout><ReleasesPage /></ProjectLayout></RequireAuth>} />
         <Route path="/projects/:projectId/integrations" element={<RequireAuth><ProjectLayout><IntegrationsPage /></ProjectLayout></RequireAuth>} />
         <Route path="/projects/:projectId/rules" element={<RequireAuth><ProjectLayout><RulesPage /></ProjectLayout></RequireAuth>} />
+        <Route path="/projects/:projectId/clusters" element={<RequireAuth><ProjectLayout><ClustersPage /></ProjectLayout></RequireAuth>} />
         <Route path="/projects/:projectId/health" element={<RequireAuth><ProjectLayout><SystemHealthPage /></ProjectLayout></RequireAuth>} />
+        <Route path="/projects/:projectId/activity" element={<RequireAuth><ProjectLayout><ActivityFeedPage /></ProjectLayout></RequireAuth>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
+    </AuthProvider>
   );
 }
 
@@ -42,12 +74,15 @@ function ProjectLayout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
 
   const tabs = [
+    { path: `/projects/${projectId}/overview`, label: 'Overview' },
     { path: `/projects/${projectId}/sessions`, label: 'Sessions' },
     { path: `/projects/${projectId}/bugs`, label: 'Bugs' },
+    { path: `/projects/${projectId}/clusters`, label: 'Clusters' },
     { path: `/projects/${projectId}/releases`, label: 'Releases' },
     { path: `/projects/${projectId}/integrations`, label: 'Integrations' },
     { path: `/projects/${projectId}/rules`, label: 'Rules' },
     { path: `/projects/${projectId}/health`, label: 'Health' },
+    { path: `/projects/${projectId}/activity`, label: 'Activity' },
     { path: `/projects/${projectId}/settings`, label: 'Settings' },
   ];
 

@@ -47,4 +47,15 @@ export class DispatchQueue {
   async addToDlq(data: DispatchJob) {
     await this.dlq.add('dead', data);
   }
+
+  async getDlqJobs(limit = 50) {
+    return this.dlq.getJobs(['failed', 'delayed', 'waiting'], 0, limit, true);
+  }
+
+  async retryDlqJob(jobId: string) {
+    const job = await this.dlq.getJob(jobId);
+    if (!job) throw new Error('Job not found in DLQ');
+    await this.queue.add('dispatch', job.data);
+    await job.remove();
+  }
 }

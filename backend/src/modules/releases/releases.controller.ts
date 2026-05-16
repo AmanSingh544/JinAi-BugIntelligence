@@ -30,6 +30,7 @@ import { extname } from 'path';
 import { mkdirSync } from 'fs';
 import { validateSourcemap } from '../errors/stack-unminifier';
 import type { Request } from 'express';
+import { PaginationDto } from '../../shared/dto/pagination.dto';
 
 const UPLOAD_DIR = './uploads/sourcemaps';
 const MAX_SOURCEMAP_SIZE = 50 * 1024 * 1024; // 50MB
@@ -48,11 +49,22 @@ export class ReleasesController {
 
   @Get()
   @UseGuards(JwtAuthGuard, TenantAuthGuard)
-  async list(@Param('projectId') projectId: string) {
-    return this.prisma.release.findMany({
-      where: { project_id: projectId },
-      orderBy: { created_at: 'desc' },
-    });
+  async list(
+    @Param('projectId') projectId: string,
+    @Query() pagination: PaginationDto,
+  ): Promise<{ items: unknown[]; total: number }> {
+    const where = { project_id: projectId };
+    const skip = (pagination.page! - 1) * pagination.limit!;
+    const [items, total] = await Promise.all([
+      this.prisma.release.findMany({
+        where,
+        orderBy: { created_at: 'desc' },
+        skip,
+        take: pagination.limit,
+      }),
+      this.prisma.release.count({ where }),
+    ]);
+    return { items, total };
   }
 
   /**

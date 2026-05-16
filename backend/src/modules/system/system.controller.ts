@@ -1,17 +1,20 @@
-import { Controller, Get, Param, Post, UseGuards, Body } from '@nestjs/common';
+import { Controller, Get, Param, Post, Query, UseGuards, Body, ForbiddenException } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../shared/guards/jwt-auth.guard';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { TenantAuthGuard } from '../auth/tenant-auth.guard';
 import { CurrentTenant } from '../../shared/tenant/current-tenant.decorator';
+import { CurrentUser } from '../../shared/decorators/current-user.decorator';
 import type { TenantContext } from '../../shared/tenant/tenant-context';
 import { Inject } from '@nestjs/common';
+import { AuthorizationService } from '../auth/authorization.service';
 import Redis from 'ioredis';
 import { REDIS_CLIENT } from '../../shared/redis/redis.provider';
 import { RetentionService } from '../retention/retention.service';
 import { PipelineTrackerService } from './pipeline-tracker.service';
 import { ErrorDetectionQueue } from '../errors/error-detection.queue';
 import { QueueMetricsService } from './queue-metrics.service';
+import { DispatchQueue } from '../integrations/dispatch.queue';
 
 @ApiTags('system')
 @ApiBearerAuth()
@@ -25,6 +28,7 @@ export class SystemController {
     private readonly tracker: PipelineTrackerService,
     private readonly errorDetectionQueue: ErrorDetectionQueue,
     private readonly queueMetrics: QueueMetricsService,
+    private readonly authz: AuthorizationService,
   ) {}
 
   @Get('health')
@@ -116,13 +120,31 @@ export class SystemController {
   }
 
   @Post('synthetic-error')
-  async injectSyntheticError(@Body() body: { projectId?: string; message?: string }) {
+  async injectSyntheticError(
+    @Body() body: { projectId?: string; message?: string },
+    @CurrentUser('sub') userId: string,
+  ) {
     const trackingId = `synth-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-    // Use provided project or first available
-    const project = body.projectId
-      ? await this.prisma.project.findUnique({ where: { id: body.projectId } })
-      : await this.prisma.project.findFirst();
+    // Use provided project or first available project the user can access
+    let project: { id: string } | null = null;
+    if (body.projectId) {
+      const canManage = await this.authz.canManageProject(userId, body.projectId);
+      if (!canManage) {
+        throw new ForbiddenException('You do not have permission to inject synthetic errors into this project');
+      }
+      project = await this.prisma.project.findUnique({ where: { id: body.projectId } });
+    } else {
+      const membership = await this.prisma.tenantMember.findFirst({
+        where: { user_id: userId },
+        orderBy: { created_at: 'asc' },
+      });
+      if (membership) {
+        project = await this.prisma.project.findFirst({
+          where: { tenant_id: membership.tenant_id },
+        });
+      }
+    }
 
     if (!project) {
       return { error: 'No project available for synthetic test' };
@@ -198,17 +220,32 @@ export class SystemController {
   }
 }
 
+@ApiTags('system')
+@ApiBearerAuth()
+@UseGuards(JwtAuthGuard, TenantAuthGuard)
 @Controller('projects/:projectId/dlq')
 export class DlqController {
-  constructor(@Inject(REDIS_CLIENT) private readonly redis: Redis) {}
+  constructor(private readonly dispatchQueue: DispatchQueue) {}
 
   @Get()
-  async list() {
-    return { jobs: [] };
+  async list(@Query('limit') limit?: string) {
+    const jobs = await this.dispatchQueue.getDlqJobs(limit ? parseInt(limit, 10) : 50);
+    return {
+      jobs: jobs.map((j) => ({
+        id: j.id,
+        name: j.name,
+        data: j.data,
+        failedReason: j.failedReason,
+        stacktrace: j.stacktrace,
+        attemptsMade: j.attemptsMade,
+        timestamp: j.timestamp,
+      })),
+    };
   }
 
   @Post(':jobId/retry')
-  async retry() {
+  async retry(@Param('jobId') jobId: string) {
+    await this.dispatchQueue.retryDlqJob(jobId);
     return { retried: true };
   }
 }

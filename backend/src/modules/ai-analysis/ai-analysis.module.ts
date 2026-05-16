@@ -7,9 +7,10 @@ import { PromptService } from './prompt.service';
 import { RulesModule } from '../rules/rules.module';
 import { PipelineModule } from '../system/pipeline.module';
 import { UserNotificationsModule } from '../user-notifications/user-notifications.module';
+import { EventsModule } from '../events/events.module';
 
 @Module({
-  imports: [RulesModule, PipelineModule, UserNotificationsModule],
+  imports: [RulesModule, PipelineModule, UserNotificationsModule, EventsModule],
   providers: [AiAnalysisQueue, AiAnalysisWorker, EmbeddingQueue, EmbeddingWorker, PromptService],
   exports: [AiAnalysisQueue, EmbeddingQueue],
 })

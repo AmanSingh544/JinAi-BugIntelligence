@@ -23,6 +23,7 @@ import { SystemModule } from './modules/system/system.module';
 import { RetentionModule } from './modules/retention/retention.module';
 import { UserNotificationsModule } from './modules/user-notifications/user-notifications.module';
 import { MetricsModule } from './modules/metrics/metrics.module';
+import { AuditModule } from './modules/audit/audit.module';
 import { HttpMetricsMiddleware } from './shared/metrics/http-metrics.middleware';
 
 @Module({
@@ -51,6 +52,8 @@ import { HttpMetricsMiddleware } from './shared/metrics/http-metrics.middleware'
     RetentionModule,
     UserNotificationsModule,
     MetricsModule,
+    AuditModule,
+    EventsModule,
   ],
   providers: [],
   exports: [],

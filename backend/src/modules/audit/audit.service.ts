@@ -27,14 +27,19 @@ export class AuditService {
     });
   }
 
-  async findByTenant(tenantId: string, limit = 100) {
+  async findByTenant(tenantId: string, skip = 0, take = 20) {
     return this.prisma.auditLog.findMany({
       where: { tenant_id: tenantId },
       orderBy: { created_at: 'desc' },
-      take: limit,
+      skip,
+      take,
       include: {
         actor: { select: { id: true, email: true } },
       },
     });
+  }
+
+  async countByTenant(tenantId: string) {
+    return this.prisma.auditLog.count({ where: { tenant_id: tenantId } });
   }
 }

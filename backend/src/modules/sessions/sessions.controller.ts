@@ -1,4 +1,5 @@
-import { Body, Controller, Get, NotFoundException, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, NotFoundException, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { PaginationDto, PaginatedResult } from '../../shared/dto/pagination.dto';
 import { ApiBearerAuth, ApiSecurity, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../shared/guards/jwt-auth.guard';
 import { TenantAuthGuard } from '../auth/tenant-auth.guard';
@@ -15,12 +16,22 @@ export class SessionsController {
   constructor(private readonly prisma: PrismaService) {}
 
   @Get()
-  async findAll(@Param('projectId') projectId: string) {
-    return this.prisma.session.findMany({
-      where: { project_id: projectId },
-      orderBy: { started_at: 'desc' },
-      take: 100,
-    });
+  async findAll(
+    @Param('projectId') projectId: string,
+    @Query() pagination: PaginationDto,
+  ): Promise<PaginatedResult<unknown>> {
+    const where = { project_id: projectId };
+    const skip = (pagination.page! - 1) * pagination.limit!;
+    const [items, total] = await Promise.all([
+      this.prisma.session.findMany({
+        where,
+        orderBy: { started_at: 'desc' },
+        skip,
+        take: pagination.limit,
+      }),
+      this.prisma.session.count({ where }),
+    ]);
+    return { items, total };
   }
 
   @Get(':sessionId/replay')
@@ -39,6 +50,120 @@ export class SessionsController {
 
     const allEvents = segments.flatMap((s) => s.events as unknown[]);
     return { events: allEvents };
+  }
+
+  @Get(':sessionId/timeline')
+  async getTimeline(
+    @Param('projectId') projectId: string,
+    @Param('sessionId') sessionId: string,
+    @Query('limit') limit?: string,
+  ) {
+    const session = await this.prisma.session.findFirst({
+      where: { id: sessionId, project_id: projectId },
+    });
+    if (!session) {
+      throw new NotFoundException('Session not found');
+    }
+
+    const take = Math.min(parseInt(limit ?? '200', 10) || 200, 500);
+
+    const hotEvents = await this.prisma.event.findMany({
+      where: { session_id: sessionId, project_id: projectId },
+      orderBy: { timestamp: 'asc' },
+      take,
+      select: {
+        id: true,
+        type: true,
+        timestamp: true,
+        payload: true,
+      },
+    });
+
+    let allEvents = hotEvents;
+    const remaining = take - hotEvents.length;
+    if (remaining > 0) {
+      const archived = await this.prisma.eventArchive.findMany({
+        where: { session_id: sessionId, project_id: projectId },
+        orderBy: { timestamp: 'asc' },
+        take: remaining,
+        select: {
+          id: true,
+          type: true,
+          timestamp: true,
+          payload: true,
+        },
+      });
+      // Deduplicate by id in case an event exists in both tables
+      const seen = new Set(hotEvents.map((e) => e.id));
+      allEvents = [...hotEvents, ...archived.filter((e) => !seen.has(e.id))];
+    }
+
+    const displayEvents = allEvents.map((e) => {
+      const payload = e.payload as Record<string, unknown>;
+      let display: Record<string, unknown> = {};
+
+      switch (e.type) {
+        case 'click':
+          display = {
+            selector: payload.selector ?? 'unknown',
+            text: payload.text ?? undefined,
+          };
+          break;
+        case 'input':
+          display = {
+            tag: payload.tag ?? 'input',
+            inputType: payload.inputType ?? 'text',
+            name: payload.name ?? undefined,
+            valueLength: payload.valueLength ?? 0,
+            isPassword: payload.isPassword ?? false,
+            selector: payload.selector ?? 'unknown',
+          };
+          break;
+        case 'navigation':
+          display = {
+            from: payload.from ?? 'unknown',
+            to: payload.to ?? 'unknown',
+          };
+          break;
+        case 'api_request':
+          display = {
+            method: payload.method ?? 'GET',
+            url: payload.url ?? 'unknown',
+          };
+          break;
+        case 'api_response':
+          display = {
+            method: payload.method ?? 'GET',
+            url: payload.url ?? 'unknown',
+            status: payload.status ?? 0,
+          };
+          break;
+        case 'console':
+          display = {
+            level: payload.level ?? 'log',
+            message: payload.message ?? '',
+          };
+          break;
+        case 'error':
+          display = {
+            message: payload.message ?? 'Unknown error',
+            file: payload.file ?? undefined,
+            line: payload.line ?? undefined,
+          };
+          break;
+        default:
+          display = payload;
+      }
+
+      return {
+        id: e.id,
+        type: e.type,
+        timestamp: Number(e.timestamp),
+        payload: display,
+      };
+    });
+
+    return { events: displayEvents };
   }
 }
 
@@ -73,16 +198,5 @@ export class ReplayController {
     });
 
     return { accepted: true };
-  }
-
-  @Get()
-  async get(@Param('sessionId') sessionId: string) {
-    const segments = await this.prisma.replaySegment.findMany({
-      where: { session_id: sessionId },
-      orderBy: { sequence: 'asc' },
-    });
-
-    const allEvents = segments.flatMap((s) => s.events as unknown[]);
-    return { events: allEvents };
   }
 }

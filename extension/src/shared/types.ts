@@ -87,6 +87,18 @@ export interface ReplaySnapshotEvent extends BaseEvent {
   };
 }
 
+export interface InputEvent extends BaseEvent {
+  type: 'input';
+  payload: {
+    tag: string;
+    inputType: string;
+    name?: string;
+    valueLength: number;
+    isPassword: boolean;
+    selector: string;
+  };
+}
+
 export type RawEvent =
   | ErrorEvent
   | ApiRequestEvent
@@ -94,6 +106,7 @@ export type RawEvent =
   | ClickEvent
   | ConsoleEvent
   | NavigationEvent
+  | InputEvent
   | ReplaySnapshotEvent;
 
 export interface ExtensionConfig {

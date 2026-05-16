@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { api, type Release, type ReleaseSourcemap } from '../api';
+import { Pagination } from '../components/Pagination';
 
 interface ReleaseWithSourcemaps extends Release {
   _sourcemaps?: ReleaseSourcemap[];
@@ -12,18 +13,22 @@ export default function ReleasesPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const [releases, setReleases] = useState<ReleaseWithSourcemaps[]>([]);
   const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const limit = 20;
 
   useEffect(() => {
     if (!projectId) return;
     fetchReleases();
-  }, [projectId]);
+  }, [projectId, page]);
 
   async function fetchReleases() {
     if (!projectId) return;
     setLoading(true);
     try {
-      const rows = await api.releases.list(projectId);
-      setReleases(rows);
+      const res = await api.releases.list(projectId, page, limit);
+      setReleases(res.items);
+      setTotal(res.total);
     } catch (err) {
       console.error(err);
     } finally {
@@ -71,7 +76,7 @@ export default function ReleasesPage() {
         </p>
       </div>
 
-      {releases.length === 0 ? (
+      {releases.length === 0 && !loading ? (
         <p style={{ color: '#64748b' }}>No releases yet.</p>
       ) : (
         <div style={{ display: 'grid', gap: 12 }}>
@@ -142,6 +147,7 @@ export default function ReleasesPage() {
           ))}
         </div>
       )}
+      <Pagination page={page} limit={limit} total={total} onPageChange={setPage} />
     </div>
   );
 }

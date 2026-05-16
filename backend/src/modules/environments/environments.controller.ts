@@ -16,6 +16,7 @@ import type { TenantContext } from '../../shared/tenant/tenant-context';
 import { AuthorizationService } from '../auth/authorization.service';
 import { EnvironmentService } from './environment.service';
 import { UpdateEnvironmentDto } from './dto/update-environment.dto';
+import { AuditService } from '../audit/audit.service';
 
 @ApiTags('environments')
 @ApiBearerAuth()
@@ -25,6 +26,7 @@ export class EnvironmentsController {
   constructor(
     private readonly envService: EnvironmentService,
     private readonly authz: AuthorizationService,
+    private readonly audit: AuditService,
   ) {}
 
   @Get()
@@ -55,6 +57,15 @@ export class EnvironmentsController {
     if (!(await this.authz.canManageProject(userId, projectId))) {
       throw new ForbiddenException('You do not have permission to update environments in this project');
     }
-    return this.envService.update(projectId, id, dto);
+    const updated = await this.envService.update(projectId, id, dto);
+    await this.audit.log({
+      tenantId: tenant.tenantId,
+      actorId: userId,
+      action: 'environment_updated',
+      entityType: 'environment',
+      entityId: id,
+      metadata: { projectId, changes: Object.keys(dto) },
+    });
+    return updated;
   }
 }

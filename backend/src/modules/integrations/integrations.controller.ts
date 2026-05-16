@@ -17,6 +17,7 @@ import { CurrentUser } from '../../shared/decorators/current-user.decorator';
 import { CurrentTenant } from '../../shared/tenant/current-tenant.decorator';
 import type { TenantContext } from '../../shared/tenant/tenant-context';
 import { PrismaService } from '../../shared/prisma/prisma.service';
+import { AuditService } from '../audit/audit.service';
 import { AuthorizationService } from '../auth/authorization.service';
 import { IntegrationRegistry } from './providers/integration.registry';
 
@@ -29,6 +30,7 @@ export class IntegrationsController {
     private readonly prisma: PrismaService,
     private readonly registry: IntegrationRegistry,
     private readonly authz: AuthorizationService,
+    private readonly audit: AuditService,
   ) {}
 
   @Get()
@@ -52,7 +54,7 @@ export class IntegrationsController {
     if (body.provider_id === 'generic_http') {
       validateGenericConfig(body.config);
     }
-    return this.prisma.projectIntegration.create({
+    const integration = await this.prisma.projectIntegration.create({
       data: {
         project_id: projectId,
         provider_id: body.provider_id,
@@ -60,14 +62,23 @@ export class IntegrationsController {
         is_active: body.is_active ?? true,
       },
     });
+    await this.audit.log({
+      tenantId: tenant.tenantId,
+      actorId: userId,
+      action: 'integration_created',
+      entityType: 'integration',
+      entityId: integration.id,
+      metadata: { projectId, providerId: body.provider_id },
+    });
+    return integration;
   }
 
   @Post(':id/validate')
   async validate(
-    @Param('projectId') _projectId: string,
+    @Param('projectId') projectId: string,
     @Param('id') id: string,
   ) {
-    const integration = await this.prisma.projectIntegration.findUnique({ where: { id } });
+    const integration = await this.prisma.projectIntegration.findUnique({ where: { id, project_id: projectId } });
     if (!integration) return { valid: false, error: 'Integration not found' };
 
     const provider = this.registry.get(integration.provider_id);
@@ -99,10 +110,19 @@ export class IntegrationsController {
     if (body.config !== undefined) data.config = body.config;
     if (body.is_active !== undefined) data.is_active = body.is_active;
 
-    return this.prisma.projectIntegration.update({
+    const updated = await this.prisma.projectIntegration.update({
       where: { id },
       data,
     });
+    await this.audit.log({
+      tenantId: tenant.tenantId,
+      actorId: userId,
+      action: 'integration_updated',
+      entityType: 'integration',
+      entityId: id,
+      metadata: { projectId, changes: Object.keys(data) },
+    });
+    return updated;
   }
 
   @Delete(':id')
@@ -116,6 +136,14 @@ export class IntegrationsController {
       throw new ForbiddenException('You do not have permission to delete integrations in this project');
     }
     await this.prisma.projectIntegration.delete({ where: { id } });
+    await this.audit.log({
+      tenantId: tenant.tenantId,
+      actorId: userId,
+      action: 'integration_deleted',
+      entityType: 'integration',
+      entityId: id,
+      metadata: { projectId },
+    });
     return { deleted: true };
   }
 }

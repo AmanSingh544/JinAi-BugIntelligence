@@ -34,19 +34,27 @@ export class EmbeddingWorker implements OnModuleInit, OnModuleDestroy {
     this.worker = new Worker<EmbeddingJob>(
       EMBEDDING_QUEUE,
       async (job: Job<EmbeddingJob>) => this.process(job),
-      { connection: this.redis, concurrency: 4 },
+      {
+        connection: this.redis,
+        concurrency: 4,
+        limiter: { max: 10, duration: 1000 },
+      },
     );
 
-    this.worker.on('failed', (job, err) =>
-      this.logger.error(`Embedding job ${job?.id} failed: ${err.message}`),
-    );
+    this.worker.on('failed', (job, err) => {
+      this.logger.error(`Embedding job ${job?.id} failed: ${err.message}`);
+      if (job && job.attemptsMade >= (job.opts.attempts ?? 3)) {
+        // Final failure — write to DLQ
+        this.writeToDlq(job.data, err, job.attemptsMade).catch(() => {});
+      }
+    });
   }
 
   async onModuleDestroy() {
     await this.worker.close();
   }
 
-  private async process(job: Job<EmbeddingJob>) {
+  protected async process(job: Job<EmbeddingJob>) {
     return this.metrics.wrapJob(EMBEDDING_QUEUE, async () => {
       const { errorId, text } = job.data;
       const start = Date.now();
@@ -54,6 +62,12 @@ export class EmbeddingWorker implements OnModuleInit, OnModuleDestroy {
       const embeddingModel = process.env.AI_EMBEDDING_MODEL;
       if (!embeddingModel) {
         this.logger.debug(`No AI_EMBEDDING_MODEL configured — skipping embedding for error=${errorId}`);
+        return;
+      }
+
+      // Skip jobs with insufficient text
+      if (text.length < 10) {
+        this.logger.warn(`Skipping embedding for error=${errorId}: text too short (${text.length} chars)`);
         return;
       }
 
@@ -80,5 +94,20 @@ export class EmbeddingWorker implements OnModuleInit, OnModuleDestroy {
         throw err; // Let BullMQ retry
       }
     });
+  }
+
+  protected async writeToDlq(data: EmbeddingJob, error: Error, attempts: number) {
+    try {
+      await this.prisma.embeddingFailure.create({
+        data: {
+          error_id: data.errorId,
+          text: data.text.slice(0, 2048),
+          error: error.message.slice(0, 500),
+          attempts,
+        },
+      });
+    } catch (dbErr) {
+      this.logger.error(`Failed to write embedding DLQ: ${(dbErr as Error).message}`);
+    }
   }
 }

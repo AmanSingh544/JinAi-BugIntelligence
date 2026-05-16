@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '../api';
+import { useAuth } from '../hooks/useAuth';
 import type { ProviderSchema } from '../../../shared/provider-schema';
 
 interface Integration {
@@ -20,6 +21,7 @@ const BUG_VARIABLES = [
 
 export default function IntegrationsPage() {
   const { projectId } = useParams<{ projectId: string }>();
+  const { canManage } = useAuth();
   const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [schemas, setSchemas] = useState<ProviderSchema[]>([]);
   const [loading, setLoading] = useState(true);
@@ -219,13 +221,15 @@ export default function IntegrationsPage() {
                   <div style={{ fontWeight: 600, color: '#e2e8f0' }}>{schema?.name ?? i.provider_id}</div>
                   <div style={{ fontSize: 12, color: '#64748b' }}>{i.is_active ? 'Active' : 'Inactive'}</div>
                 </div>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button className="secondary" onClick={() => validateIntegration(i.id)}>Test</button>
-                  <button className="secondary" onClick={() => toggleIntegration(i.id, i.is_active)}>
-                    {i.is_active ? 'Pause' : 'Activate'}
-                  </button>
-                  <button className="danger" onClick={() => deleteIntegration(i.id)}>Delete</button>
-                </div>
+                {projectId && canManage(projectId) && (
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button className="secondary" onClick={() => validateIntegration(i.id)}>Test</button>
+                    <button className="secondary" onClick={() => toggleIntegration(i.id, i.is_active)}>
+                      {i.is_active ? 'Pause' : 'Activate'}
+                    </button>
+                    <button className="danger" onClick={() => deleteIntegration(i.id)}>Delete</button>
+                  </div>
+                )}
               </div>
             );
           })}
