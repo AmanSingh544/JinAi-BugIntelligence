@@ -662,3 +662,23 @@ The Chrome extension runs from the already-built `extension\dist\` and does not 
 
 **Extension not capturing — popup shows "Inactive"**
 → Make sure you clicked **Start Capture** in the popup and that the API key is correctly pasted (format: `bi_live_` followed by 64 hex characters).
+
+
+
+## --------------------------------####-------------------------------------------
+###### Run on local to test uplaod source map file
+## — build internal-console + upload sourcemaps
+
+
+# Build the internal-console app
+cd C:\Users\aman.singh\source\Workspace\Meridian\3sc-platform\frontend\apps\internal-console
+npm run build
+
+# Upload sourcemaps to bug intelligence
+bi-upload-sourcemaps `
+  --project-id <UUID> `
+  --api-key <bi_live_...> `
+  --api-url http://localhost:4000/api/v1 `
+  dist
+
+## --------------------------------#####-------------------------------------------
