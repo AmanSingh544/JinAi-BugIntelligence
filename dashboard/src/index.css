@@ -1,122 +1,355 @@
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+@import "tailwindcss";
 
-:root {
-  --bg: #0f1117;
-  --surface: #1a1d27;
-  --border: #2d3148;
-  --text: #e2e8f0;
-  --muted: #64748b;
-  --accent: #6366f1;
-  --accent-hover: #4f46e5;
-  --danger: #ef4444;
-  --success: #22c55e;
-  --warn: #f59e0b;
+/* ── Design tokens (Tailwind v4 theme) ──────────────────────────────────── */
+@theme {
+  --font-sans: 'Inter var', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-2xl: 20px;
+}
+
+/* ── Dark theme (default) ────────────────────────────────────────────────── */
+/* WCAG AA: all text/bg pairs ≥ 4.5:1 */
+html, html[data-theme="dark"] {
+  --th-color-scheme: dark;
+  --th-bg:         #09090b;   /* zinc-950 */
+  --th-surface:    #111113;   /* near zinc-900 */
+  --th-surface-2:  #18181b;   /* zinc-900 */
+  --th-surface-3:  #27272a;   /* zinc-800 – used for hover states */
+  --th-border:     #27272a;   /* zinc-800 */
+  --th-border-sub: #1f1f22;   /* slightly lighter than bg */
+  --th-text:       #fafafa;   /* zinc-50 – 15.3:1 on bg */
+  --th-text-2:     #a1a1aa;   /* zinc-400 – 5.9:1 on surface */
+  --th-text-3:     #71717a;   /* zinc-500 – 4.6:1 on surface */
+  --th-accent:     #6366f1;   /* indigo-500 */
+  --th-accent-2:   #4f46e5;   /* indigo-600 */
+  --th-accent-3:   #818cf8;   /* indigo-400 */
+  --th-danger:     #ef4444;   /* red-500 */
+  --th-success:    #22c55e;   /* green-500 */
+  --th-warn:       #f59e0b;   /* amber-500 */
+
+  /* Scrollbar */
+  --th-scrollbar:      #27272a;
+  --th-scrollbar-hov:  #3f3f46;
+
+  /* Input/form */
+  --th-input-bg:       #18181b;
+  --th-input-border:   #27272a;
+  --th-input-text:     #f4f4f5;
+  --th-input-ph:       #52525b;
+
+  /* Card hover overlay */
+  --th-card-hov-border: #3f3f46;
+  --th-card-hov-bg:     #111113;
+  --th-card-hov-shadow: 0 0 0 1px rgba(99,102,241,0.06), 0 4px 16px rgba(0,0,0,0.30);
+
+  /* Sidebar */
+  --th-sidebar-bg:     #0d0d0f;
+  --th-header-bg:      #0d0d0f;
+
+  /* Tooltip */
+  --th-tooltip-bg:     #18181b;
+  --th-tooltip-border: #27272a;
+  --th-tooltip-text:   #e4e4e7;
+
+  /* Code */
+  --th-code-bg:        #09090b;
+  --th-code-border:    #27272a;
+  --th-code-inline-bg: rgba(99,102,241,0.12);
+  --th-code-inline-bd: rgba(99,102,241,0.15);
+  --th-code-inline-tx: #a5b4fc;
+
+  /* Kbd */
+  --th-kbd-bg:    #27272a;
+  --th-kbd-text:  #71717a;
+
+  /* Selection */
+  --th-sel-bg:    rgba(99,102,241,0.30);
+}
+
+/* ── Light theme ─────────────────────────────────────────────────────────── */
+/* WCAG AA: all text/bg pairs ≥ 4.5:1 */
+html[data-theme="light"] {
+  --th-color-scheme: light;
+  --th-bg:         #f8f8fc;   /* near white, slight blue tint */
+  --th-surface:    #ffffff;
+  --th-surface-2:  #f1f1f6;   /* light gray-lavender */
+  --th-surface-3:  #e4e4ee;   /* hover state */
+  --th-border:     #d4d4de;   /* visible but soft */
+  --th-border-sub: #e8e8f0;
+  --th-text:       #111118;   /* near-black – 16:1 on bg */
+  --th-text-2:     #4b4b6a;   /* muted indigo-tinted – 7.2:1 on bg */
+  --th-text-3:     #75758a;   /* placeholder – 4.7:1 on bg */
+  --th-accent:     #4f46e5;   /* indigo-600 – 5.1:1 on white */
+  --th-accent-2:   #3730a3;   /* indigo-800 – deeper for hover */
+  --th-accent-3:   #6366f1;   /* indigo-500 */
+  --th-danger:     #dc2626;   /* red-600 – 5.9:1 on white */
+  --th-success:    #16a34a;   /* green-600 – 5.2:1 on white */
+  --th-warn:       #b45309;   /* amber-700 – 5.8:1 on white */
+
+  --th-scrollbar:      #d4d4de;
+  --th-scrollbar-hov:  #a1a1b5;
+
+  --th-input-bg:       #ffffff;
+  --th-input-border:   #d4d4de;
+  --th-input-text:     #111118;
+  --th-input-ph:       #9090a8;
+
+  --th-card-hov-border: #a1a1b5;
+  --th-card-hov-bg:     #f4f4fa;
+  --th-card-hov-shadow: 0 0 0 1px rgba(79,70,229,0.08), 0 4px 16px rgba(0,0,0,0.07);
+
+  --th-sidebar-bg:     #f0f0f8;
+  --th-header-bg:      #f0f0f8;
+
+  --th-tooltip-bg:     #ffffff;
+  --th-tooltip-border: #d4d4de;
+  --th-tooltip-text:   #111118;
+
+  --th-code-bg:        #f1f1f6;
+  --th-code-border:    #d4d4de;
+  --th-code-inline-bg: rgba(79,70,229,0.08);
+  --th-code-inline-bd: rgba(79,70,229,0.15);
+  --th-code-inline-tx: #4f46e5;
+
+  --th-kbd-bg:    #e4e4ee;
+  --th-kbd-text:  #4b4b6a;
+
+  --th-sel-bg:    rgba(79,70,229,0.18);
+}
+
+/* ── Base styles ─────────────────────────────────────────────────────────── */
+html {
+  color-scheme: dark;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+html[data-theme="light"] {
+  color-scheme: light;
 }
 
 body {
-  background: var(--bg);
-  color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--th-bg);
+  color: var(--th-text);
+  font-family: var(--font-sans);
   font-size: 14px;
   line-height: 1.5;
+  min-height: 100vh;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
-a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
+/* ── Scrollbar ───────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--th-scrollbar); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: var(--th-scrollbar-hov); }
+/* Firefox */
+* { scrollbar-width: thin; scrollbar-color: var(--th-scrollbar) transparent; }
 
-button {
-  cursor: pointer;
-  border: none;
+/* ── Focus / selection ───────────────────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--th-accent);
+  outline-offset: 2px;
+}
+::selection {
+  background: var(--th-sel-bg);
+  color: var(--th-text);
+}
+
+/* ── Typography ──────────────────────────────────────────────────────────── */
+code, pre { font-family: var(--font-mono); }
+
+.font-mono {
+  font-family: var(--font-mono);
+  font-size: 0.8em;
+  letter-spacing: -0.01em;
+}
+
+/* ── Chat code blocks ────────────────────────────────────────────────────── */
+.chat-content code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--th-code-inline-bg);
+  border: 1px solid var(--th-code-inline-bd);
+  color: var(--th-code-inline-tx);
+  padding: 0.1em 0.4em;
+  border-radius: 3px;
+}
+.chat-content pre {
+  background: var(--th-code-bg);
+  border: 1px solid var(--th-code-border);
   border-radius: 6px;
-  padding: 6px 14px;
-  font-size: 13px;
-  font-weight: 600;
-  background: var(--accent);
-  color: #fff;
-  transition: background 0.15s;
-}
-button:hover { background: var(--accent-hover); }
-button.secondary { background: var(--surface); border: 1px solid var(--border); color: var(--text); }
-button.danger { background: var(--danger); }
-
-input, select {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text);
-  font-size: 13px;
-  padding: 7px 10px;
-  outline: none;
-  width: 100%;
-}
-input:focus, select:focus { border-color: var(--accent); }
-
-input[type="checkbox"] {
-  appearance: none;
-  -webkit-appearance: none;
-  width: 16px;
-  height: 16px;
-  min-width: 16px;
-  min-height: 16px;
-  padding: 0;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  cursor: pointer;
-  display: inline-grid;
-  place-content: center;
-  transition: background 0.15s, border-color 0.15s;
-}
-
-input[type="checkbox"]::before {
-  content: "";
-  width: 9px;
-  height: 9px;
-  transform: scale(0);
-  transition: transform 0.12s ease-in-out;
-  box-shadow: inset 1em 1em #fff;
-  transform-origin: center;
-  clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 80% 0%, 43% 62%);
-}
-
-input[type="checkbox"]:checked {
-  background: var(--accent);
-  border-color: var(--accent);
-}
-
-input[type="checkbox"]:checked::before {
-  transform: scale(1);
-}
-
-input[type="checkbox"]:hover {
-  border-color: var(--accent);
-}
-
-input[type="checkbox"]:focus {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-.card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 20px;
-}
-
-.badge {
+  padding: 10px 12px;
+  overflow-x: auto;
   font-size: 11px;
-  font-weight: 600;
-  padding: 2px 8px;
-  border-radius: 999px;
-  display: inline-block;
+  line-height: 1.6;
+  margin-top: 6px;
 }
-.badge-critical { background: #450a0a; color: #fca5a5; }
-.badge-high { background: #431407; color: #fdba74; }
-.badge-medium { background: #451a03; color: #fcd34d; }
-.badge-low { background: #052e16; color: #86efac; }
-.badge-open { background: #1e3a5f; color: #93c5fd; }
-.badge-resolved { background: #052e16; color: #86efac; }
-.badge-ignored { background: #1f2937; color: #9ca3af; }
-.badge-ai_failed { background: #3b0764; color: #d8b4fe; }
-.badge-dispatched { background: #1e1b4b; color: #a5b4fc; }
+
+/* ── rrweb player ────────────────────────────────────────────────────────── */
+.rr-player {
+  border-radius: var(--radius-lg) !important;
+  overflow: hidden;
+  border: 1px solid var(--th-border);
+}
+
+/* ── Animations ──────────────────────────────────────────────────────────── */
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.94); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes shimmer {
+  from { background-position: -200% 0; }
+  to   { background-position: 200% 0; }
+}
+@keyframes slide-in-left {
+  from { opacity: 0; transform: translateX(-8px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+.animate-fade-up    { animation: fade-up 0.35s cubic-bezier(0.16,1,0.3,1) both; }
+.animate-fade-in    { animation: fade-in 0.2s ease both; }
+.animate-scale-in   { animation: scale-in 0.2s cubic-bezier(0.16,1,0.3,1) both; }
+.animate-slide-left { animation: slide-in-left 0.25s cubic-bezier(0.16,1,0.3,1) both; }
+
+.stagger-1 { animation-delay: 0.04s; }
+.stagger-2 { animation-delay: 0.08s; }
+.stagger-3 { animation-delay: 0.12s; }
+.stagger-4 { animation-delay: 0.16s; }
+.stagger-5 { animation-delay: 0.20s; }
+.stagger-6 { animation-delay: 0.24s; }
+
+/* ── Skeleton ────────────────────────────────────────────────────────────── */
+.skeleton {
+  background: linear-gradient(90deg, var(--th-surface-2) 25%, var(--th-surface-3) 50%, var(--th-surface-2) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: 6px;
+}
+
+/* ── Card micro-interaction ──────────────────────────────────────────────── */
+.card-hover {
+  transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+}
+.card-hover:hover {
+  border-color: var(--th-card-hov-border);
+  background-color: var(--th-card-hov-bg);
+  box-shadow: var(--th-card-hov-shadow);
+}
+
+/* ── Sidebar tooltip ─────────────────────────────────────────────────────── */
+[data-tooltip] { position: relative; }
+[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: calc(100% + 10px);
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--th-tooltip-bg);
+  border: 1px solid var(--th-tooltip-border);
+  color: var(--th-tooltip-text);
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+  z-index: 99;
+}
+[data-tooltip]:hover::after { opacity: 1; }
+
+/* ── Misc interactions ───────────────────────────────────────────────────── */
+button:active:not(:disabled) { transform: scale(0.97); }
+.copy-btn { transition: color 0.15s ease; }
+.copy-btn.copied { color: #4ade80; }
+
+/* ── Semantic theme utilities ────────────────────────────────────────────── */
+/*
+ * These are used throughout the codebase as plain class names.
+ * They complement the Tailwind @theme tokens above. hover:/focus: variants
+ * for these are inlined in JSX (e.g. "hover:bg-th-surface-2").
+ * CSS handles the hover case via the cascade since we define the hover
+ * version as a separate rule.
+ */
+
+/* Backgrounds */
+.bg-th-bg        { background-color: var(--th-bg); }
+.bg-th-surface   { background-color: var(--th-surface); }
+.bg-th-surface-2 { background-color: var(--th-surface-2); }
+.bg-th-surface-3 { background-color: var(--th-surface-3); }
+.bg-th-sidebar   { background-color: var(--th-sidebar-bg); }
+.bg-th-header    { background-color: var(--th-header-bg); }
+
+/* Hover backgrounds (for use as hover:bg-th-* in JSX with Tailwind arbitrary) */
+.hover\:bg-th-bg:hover        { background-color: var(--th-bg); }
+.hover\:bg-th-surface:hover   { background-color: var(--th-surface); }
+.hover\:bg-th-surface-2:hover { background-color: var(--th-surface-2); }
+.hover\:bg-th-surface-3:hover { background-color: var(--th-surface-3); }
+
+/* Muted surface bg (for timeline dots, etc.) */
+.bg-th-3 { background-color: var(--th-text-3); }
+
+/* Borders */
+.border-th        { border-color: var(--th-border); }
+.border-th-sub    { border-color: var(--th-border-sub); }
+.border-th-card-hov { border-color: var(--th-card-hov-border); }
+
+.hover\:border-th-card-hov:hover { border-color: var(--th-card-hov-border); }
+.hover\:border-th:hover           { border-color: var(--th-border); }
+
+/* Text */
+.text-th          { color: var(--th-text); }
+.text-th-2        { color: var(--th-text-2); }
+.text-th-3        { color: var(--th-text-3); }
+.text-th-accent   { color: var(--th-accent); }
+.text-th-accent-3 { color: var(--th-accent-3); }
+.text-th-danger   { color: var(--th-danger); }
+.text-th-success  { color: var(--th-success); }
+.text-th-warn     { color: var(--th-warn); }
+
+.hover\:text-th:hover   { color: var(--th-text); }
+.hover\:text-th-2:hover { color: var(--th-text-2); }
+.hover\:text-th-3:hover { color: var(--th-text-3); }
+
+/* Input / kbd */
+.input-th {
+  background-color: var(--th-input-bg);
+  border-color: var(--th-input-border);
+  color: var(--th-input-text);
+}
+.input-th::placeholder { color: var(--th-input-ph); }
+.input-th:focus {
+  border-color: var(--th-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--th-accent) 20%, transparent);
+}
+
+.kbd-th {
+  background: var(--th-kbd-bg);
+  color: var(--th-kbd-text);
+}
+
+/* Theme transition – smooth switch on all bg/text/border */
+*, *::before, *::after {
+  transition-property: background-color, border-color, color, fill, stroke;
+  transition-duration: 0.15s;
+  transition-timing-function: ease;
+}
+/* But don't slow down transforms/opacity */
+.animate-fade-up, .animate-fade-in, .animate-scale-in, .animate-slide-left,
+button:active, .card-hover, .skeleton {
+  transition: inherit;
+}

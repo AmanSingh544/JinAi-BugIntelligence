@@ -1,8 +1,19 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
+import { motion, AnimatePresence } from 'framer-motion';
+import {
+  Puzzle, Plus, X, CheckCircle2, XCircle, Pause, Play,
+  Trash2, Shield, Globe, ChevronDown, ChevronUp, AlertCircle,
+} from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../hooks/useAuth';
 import type { ProviderSchema } from '../../../shared/provider-schema';
+import { Button } from '../components/ui/Button';
+import { Input } from '../components/ui/Input';
+import { Card, CardHeader, CardTitle } from '../components/ui/Card';
+import { EmptyState } from '../components/ui/EmptyState';
+import { Skeleton } from '../components/ui/Skeleton';
+import { cn } from '../lib/utils';
 
 interface Integration {
   id: string;
@@ -31,10 +42,12 @@ export default function IntegrationsPage() {
   const [genericConfig, setGenericConfig] = useState<GenericFormState>(makeEmptyGenericConfig());
   const [bodyJsonError, setBodyJsonError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [validating, setValidating] = useState<string | null>(null);
+  const [validationMsg, setValidationMsg] = useState<{ id: string; ok: boolean; msg: string } | null>(null);
 
   useEffect(() => {
     if (!projectId) return;
-    loadData();
+    void loadData();
   }, [projectId]);
 
   async function loadData() {
@@ -67,7 +80,6 @@ export default function IntegrationsPage() {
 
   async function addIntegration() {
     if (!projectId || !selectedProvider) return;
-
     const schema = getSchema(selectedProvider);
     if (!schema) return;
 
@@ -83,7 +95,6 @@ export default function IntegrationsPage() {
         return;
       }
       setBodyJsonError('');
-
       payloadConfig = {
         schemaVersion: 1,
         baseUrl: genericConfig.baseUrl,
@@ -124,7 +135,6 @@ export default function IntegrationsPage() {
       await loadData();
     } catch (err) {
       console.error(err);
-      alert('Failed to add integration');
     } finally {
       setSaving(false);
     }
@@ -153,93 +163,185 @@ export default function IntegrationsPage() {
 
   async function validateIntegration(id: string) {
     if (!projectId) return;
+    setValidating(id);
+    setValidationMsg(null);
     try {
       const res = await api.integrations.validate(projectId, id);
-      alert(res.valid ? 'Credentials valid' : `Invalid: ${res.error ?? 'Unknown error'}`);
-    } catch (err) {
-      console.error(err);
-      alert('Validation failed');
+      setValidationMsg({ id, ok: res.valid, msg: res.valid ? 'Credentials valid' : (res.error ?? 'Unknown error') });
+    } catch {
+      setValidationMsg({ id, ok: false, msg: 'Validation failed' });
+    } finally {
+      setValidating(null);
+      setTimeout(() => setValidationMsg(null), 4000);
     }
   }
-
-  if (loading) return <div style={{ padding: 24, color: '#e2e8f0' }}>Loading...</div>;
 
   const selectedSchema = getSchema(selectedProvider);
 
   return (
-    <div style={{ maxWidth: 900, margin: '0 auto', padding: 24 }}>
-      <h1 style={{ color: '#e2e8f0', marginBottom: 24 }}>Integrations</h1>
-
-      <button onClick={() => { setShowAdd(!showAdd); if (showAdd) resetForm(); }} style={{ marginBottom: 16 }}>
-        {showAdd ? 'Cancel' : '+ Add Integration'}
-      </button>
-
-      {showAdd && (
-        <div className="card" style={{ padding: 20, marginBottom: 24 }}>
-          <div style={{ marginBottom: 12 }}>
-            <label style={{ display: 'block', color: '#64748b', fontSize: 12, marginBottom: 4 }}>Provider</label>
-            <select
-              value={selectedProvider}
-              onChange={(e) => { setSelectedProvider(e.target.value); setConfig({}); setGenericConfig(makeEmptyGenericConfig()); setBodyJsonError(''); }}
-            >
-              <option value="">Select...</option>
-              {schemas.map((s) => (
-                <option key={s.id} value={s.id}>{s.name}</option>
-              ))}
-            </select>
-          </div>
-
-          {selectedSchema?.type === 'managed' && (
-            <ManagedProviderForm schema={selectedSchema} config={config} onChange={setConfig} />
-          )}
-
-          {selectedSchema?.type === 'generic' && (
-            <GenericProviderForm
-              state={genericConfig}
-              onChange={setGenericConfig}
-              bodyJsonError={bodyJsonError}
-            />
-          )}
-
-          {selectedProvider && (
-            <button onClick={addIntegration} disabled={saving} style={{ marginTop: 16 }}>
-              {saving ? 'Saving...' : 'Save'}
-            </button>
-          )}
+    <div className="flex flex-col h-full">
+      {/* Header */}
+      <div className="sticky top-0 z-10 bg-th-bg px-6 pt-2 pb-1 border-th-sub flex items-center justify-between">
+        <div>
+          <h1 className="text-base font-bold text-th">Integrations</h1>
+          <p className="text-xs text-th-3 mt-0.5">Connect external services for bug dispatch</p>
         </div>
-      )}
+        {canManage(projectId ?? '') && (
+          <Button
+            size="sm"
+            variant={showAdd ? 'secondary' : 'primary'}
+            onClick={() => { setShowAdd((v) => !v); if (showAdd) resetForm(); }}
+          >
+            {showAdd ? <><X size={12} /> Cancel</> : <><Plus size={12} /> Add Integration</>}
+          </Button>
+        )}
+      </div>
+      <div className="p-6 max-w-100% mx-auto w-full">
 
-      {integrations.length === 0 ? (
-        <p style={{ color: '#64748b' }}>No integrations configured.</p>
-      ) : (
-        <div style={{ display: 'grid', gap: 12 }}>
-          {integrations.map((i) => {
-            const schema = getSchema(i.provider_id);
-            return (
-              <div key={i.id} className="card" style={{ padding: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <div style={{ fontWeight: 600, color: '#e2e8f0' }}>{schema?.name ?? i.provider_id}</div>
-                  <div style={{ fontSize: 12, color: '#64748b' }}>{i.is_active ? 'Active' : 'Inactive'}</div>
+      {/* Add form */}
+      <AnimatePresence>
+        {showAdd && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden mb-5"
+          >
+            <Card className="p-5">
+              <CardHeader className="mb-4">
+                <CardTitle>New Integration</CardTitle>
+              </CardHeader>
+
+              {/* Provider select */}
+              <div className="mb-4">
+                <label className="block text-[11px] font-medium text-th-3 uppercase tracking-wider mb-1.5">Provider</label>
+                <select
+                  value={selectedProvider}
+                  onChange={(e) => {
+                    setSelectedProvider(e.target.value);
+                    setConfig({});
+                    setGenericConfig(makeEmptyGenericConfig());
+                    setBodyJsonError('');
+                  }}
+                  className="w-full bg-th-surface border border-th rounded-md text-sm text-th px-3 py-2 outline-none focus:border-indigo-500 transition-colors duration-150"
+                >
+                  <option value="">Select a provider...</option>
+                  {schemas.map((s) => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              {selectedSchema?.type === 'managed' && (
+                <ManagedProviderForm schema={selectedSchema} config={config} onChange={setConfig} />
+              )}
+
+              {selectedSchema?.type === 'generic' && (
+                <GenericProviderForm
+                  state={genericConfig}
+                  onChange={setGenericConfig}
+                  bodyJsonError={bodyJsonError}
+                />
+              )}
+
+              {selectedProvider && (
+                <div className="mt-5 pt-4 border-t border-th">
+                  <Button size="sm" onClick={() => void addIntegration()} loading={saving}>
+                    Save Integration
+                  </Button>
                 </div>
-                {projectId && canManage(projectId) && (
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <button className="secondary" onClick={() => validateIntegration(i.id)}>Test</button>
-                    <button className="secondary" onClick={() => toggleIntegration(i.id, i.is_active)}>
-                      {i.is_active ? 'Pause' : 'Activate'}
-                    </button>
-                    <button className="danger" onClick={() => deleteIntegration(i.id)}>Delete</button>
+              )}
+            </Card>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Integration list */}
+      {loading ? (
+        <div className="space-y-2">
+          {[1, 2, 3].map((i) => <Skeleton key={i} className="h-16" />)}
+        </div>
+      ) : integrations.length === 0 ? (
+        <EmptyState
+          icon={<Puzzle size={18} />}
+          title="No integrations yet"
+          description="Connect Jira, GitHub, or any webhook-compatible service to dispatch bugs automatically."
+        />
+      ) : (
+        <div className="space-y-2">
+          {integrations.map((integration, idx) => {
+            const schema = getSchema(integration.provider_id);
+            const msg = validationMsg?.id === integration.id ? validationMsg : null;
+            return (
+              <motion.div
+                key={integration.id}
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: idx * 0.04 }}
+                className="bg-th-surface border border-th rounded-lg px-4 py-3.5 flex items-center justify-between gap-4"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className={cn(
+                    'w-8 h-8 rounded-md border flex items-center justify-center flex-shrink-0',
+                    integration.is_active
+                      ? 'bg-indigo-500/10 border-indigo-500/30'
+                      : 'bg-th-surface-2 border-th'
+                  )}>
+                    <Puzzle size={14} className={integration.is_active ? 'text-indigo-400' : 'text-th-3'} />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium text-th">{schema?.name ?? integration.provider_id}</div>
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      <div className={cn('w-1.5 h-1.5 rounded-full', integration.is_active ? 'bg-green-400' : 'bg-zinc-600')} />
+                      <span className="text-[11px] text-th-3">{integration.is_active ? 'Active' : 'Inactive'}</span>
+                      {msg && (
+                        <span className={cn('flex items-center gap-1 text-[11px] ml-2', msg.ok ? 'text-green-400' : 'text-red-400')}>
+                          {msg.ok ? <CheckCircle2 size={11} /> : <AlertCircle size={11} />}
+                          {msg.msg}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {canManage(projectId ?? '') && (
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <Button
+                      size="xs"
+                      variant="secondary"
+                      loading={validating === integration.id}
+                      onClick={() => void validateIntegration(integration.id)}
+                    >
+                      Test
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant="secondary"
+                      onClick={() => void toggleIntegration(integration.id, integration.is_active)}
+                    >
+                      {integration.is_active ? <><Pause size={11} /> Pause</> : <><Play size={11} /> Activate</>}
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant="danger"
+                      onClick={() => void deleteIntegration(integration.id)}
+                    >
+                      <Trash2 size={11} />
+                    </Button>
                   </div>
                 )}
-              </div>
+              </motion.div>
             );
           })}
         </div>
       )}
+      </div>
     </div>
   );
 }
 
-// ─── Managed Provider Form ───
+// ─── Managed Provider Form ─────────────────────────────────────────────────
 
 function ManagedProviderForm({
   schema,
@@ -251,17 +353,17 @@ function ManagedProviderForm({
   onChange: (c: Record<string, string>) => void;
 }) {
   return (
-    <div style={{ display: 'grid', gap: 12, marginBottom: 16 }}>
+    <div className="space-y-3">
       {schema.fields.map((field: ProviderSchema['fields'][number]) => (
         <div key={field.name}>
-          <label style={{ display: 'block', color: '#64748b', fontSize: 12, marginBottom: 4 }}>
-            {field.label}{field.required ? ' *' : ''}
+          <label className="block text-[11px] font-medium text-th-3 uppercase tracking-wider mb-1.5">
+            {field.label}{field.required && <span className="text-red-400 ml-0.5">*</span>}
           </label>
           {field.type === 'select' ? (
             <select
               value={config[field.name] ?? ''}
               onChange={(e) => onChange({ ...config, [field.name]: e.target.value })}
-              style={{ width: '100%' }}
+              className="w-full bg-th-surface border border-th rounded-md text-sm text-th px-3 py-2 outline-none focus:border-indigo-500 transition-colors duration-150"
             >
               <option value="">Select...</option>
               {field.options?.map((opt: string) => (
@@ -269,27 +371,23 @@ function ManagedProviderForm({
               ))}
             </select>
           ) : (
-            <input
+            <Input
               type={field.type === 'password' ? 'password' : 'text'}
               value={config[field.name] ?? ''}
               placeholder={field.placeholder}
               onChange={(e) => onChange({ ...config, [field.name]: e.target.value })}
-              style={{ width: '100%' }}
             />
           )}
-          {field.hint && <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>{field.hint}</div>}
+          {field.hint && <p className="text-[11px] text-th-3 mt-1">{field.hint}</p>}
         </div>
       ))}
     </div>
   );
 }
 
-// ─── Generic Provider Form ───
+// ─── Generic Provider Form ─────────────────────────────────────────────────
 
-interface KeyValuePair {
-  key: string;
-  value: string;
-}
+interface KeyValuePair { key: string; value: string; }
 
 interface GenericFormState {
   baseUrl: string;
@@ -324,10 +422,7 @@ function makeEmptyGenericConfig(): GenericFormState {
     createTicketUrl: '',
     createTicketMethod: 'POST',
     headers: [],
-    bodyTemplateString: JSON.stringify({
-      title: '{{bug.summary}}',
-      description: '{{bug.rootCause}}',
-    }, null, 2),
+    bodyTemplateString: JSON.stringify({ title: '{{bug.summary}}', description: '{{bug.rootCause}}' }, null, 2),
     ticketIdPath: 'data.id',
     ticketUrlPath: '',
     variables: [],
@@ -342,6 +437,117 @@ function keyValueArrayToRecord(pairs: KeyValuePair[]): Record<string, string> {
   return rec;
 }
 
+function FormLabel({ children, required }: { children: React.ReactNode; required?: boolean }) {
+  return (
+    <label className="block text-[11px] font-medium text-th-3 uppercase tracking-wider mb-1.5">
+      {children}{required && <span className="text-red-400 ml-0.5">*</span>}
+    </label>
+  );
+}
+
+function StyledSelect({ value, onChange, children }: { value: string; onChange: (v: string) => void; children: React.ReactNode }) {
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="w-full bg-th-surface border border-th rounded-md text-sm text-th px-3 py-2 outline-none focus:border-indigo-500 transition-colors duration-150"
+    >
+      {children}
+    </select>
+  );
+}
+
+function KeyValueList({
+  pairs,
+  field,
+  keyPlaceholder,
+  valuePlaceholder,
+  onAdd,
+  onUpdate,
+  onRemove,
+}: {
+  pairs: KeyValuePair[];
+  field: 'headers' | 'authCookies' | 'variables';
+  keyPlaceholder: string;
+  valuePlaceholder: string;
+  onAdd: () => void;
+  onUpdate: (idx: number, key: string, value: string) => void;
+  onRemove: (idx: number) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      {pairs.map((p, i) => (
+        <div key={i} className="flex gap-2">
+          <input
+            type="text"
+            placeholder={keyPlaceholder}
+            value={p.key}
+            onChange={(e) => onUpdate(i, e.target.value, p.value)}
+            className="flex-1 bg-th-surface border border-th rounded-md text-xs text-th px-2.5 py-1.5 outline-none focus:border-indigo-500 font-mono transition-colors duration-150"
+          />
+          <input
+            type="text"
+            placeholder={valuePlaceholder}
+            value={p.value}
+            onChange={(e) => onUpdate(i, p.key, e.target.value)}
+            className="flex-[2] bg-th-surface border border-th rounded-md text-xs text-th px-2.5 py-1.5 outline-none focus:border-indigo-500 font-mono transition-colors duration-150"
+          />
+          <button
+            onClick={() => onRemove(i)}
+            className="text-th-3 hover:text-red-400 transition-colors duration-150 px-1"
+          >
+            <X size={13} />
+          </button>
+        </div>
+      ))}
+      <button
+        onClick={onAdd}
+        className="text-[11px] text-indigo-400 hover:text-indigo-300 transition-colors duration-150 flex items-center gap-1"
+      >
+        <Plus size={11} /> Add {field === 'authCookies' ? 'cookie' : field === 'headers' ? 'header' : 'variable'}
+      </button>
+    </div>
+  );
+}
+
+function CollapsibleSection({ title, icon, defaultOpen = false, children }: {
+  title: string;
+  icon: React.ReactNode;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="border border-th rounded-lg overflow-hidden">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between px-4 py-3 hover:bg-th-surface-2/30 transition-colors duration-150"
+      >
+        <div className="flex items-center gap-2">
+          <span className="text-th-3">{icon}</span>
+          <span className="text-xs font-semibold text-th-2">{title}</span>
+        </div>
+        {open ? <ChevronUp size={13} className="text-th-3" /> : <ChevronDown size={13} className="text-th-3" />}
+      </button>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            className="overflow-hidden"
+          >
+            <div className="px-4 pb-4 pt-1 border-t border-th space-y-3">
+              {children}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 function GenericProviderForm({
   state,
   onChange,
@@ -353,9 +559,8 @@ function GenericProviderForm({
 }) {
   const update = (patch: Partial<GenericFormState>) => onChange({ ...state, ...patch });
 
-  const addPair = (field: 'headers' | 'authCookies' | 'variables') => {
+  const addPair = (field: 'headers' | 'authCookies' | 'variables') =>
     update({ [field]: [...state[field], { key: '', value: '' }] } as Partial<GenericFormState>);
-  };
 
   const updatePair = (field: 'headers' | 'authCookies' | 'variables', idx: number, key: string, value: string) => {
     const arr = [...state[field]];
@@ -370,169 +575,180 @@ function GenericProviderForm({
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div className="space-y-3 mt-4">
       {/* Base URL */}
       <div>
-        <label style={{ display: 'block', color: '#64748b', fontSize: 12, marginBottom: 4 }}>Base URL *</label>
-        <input
-          type="text"
+        <FormLabel required>Base URL</FormLabel>
+        <Input
           value={state.baseUrl}
           onChange={(e) => update({ baseUrl: e.target.value })}
           placeholder="https://tracker.internal.com"
-          style={{ width: '100%' }}
         />
       </div>
 
       {/* Auth */}
-      <div style={{ border: '1px solid #334155', borderRadius: 6, padding: 12 }}>
-        <div style={{ fontWeight: 600, color: '#e2e8f0', fontSize: 13, marginBottom: 10 }}>Authentication</div>
-        <div style={{ marginBottom: 10 }}>
-          <label style={{ display: 'block', color: '#64748b', fontSize: 12, marginBottom: 4 }}>Type</label>
-          <select
-            value={state.authType}
-            onChange={(e) => update({ authType: e.target.value })}
-            style={{ width: '100%' }}
-          >
+      <CollapsibleSection title="Authentication" icon={<Shield size={13} />} defaultOpen>
+        <div>
+          <FormLabel>Type</FormLabel>
+          <StyledSelect value={state.authType} onChange={(v) => update({ authType: v })}>
             <option value="none">None</option>
             <option value="bearer">Bearer Token</option>
             <option value="basic">Basic Auth</option>
             <option value="api_key">API Key</option>
             <option value="cookie">Cookie</option>
-          </select>
+          </StyledSelect>
         </div>
 
-        {state.authType === 'bearer' && (
-          <div>
-            <label style={{ display: 'block', color: '#64748b', fontSize: 12, marginBottom: 4 }}>Token</label>
-            <input type="password" value={state.authToken} onChange={(e) => update({ authToken: e.target.value })} style={{ width: '100%' }} />
-          </div>
-        )}
-
-        {state.authType === 'basic' && (
-          <div style={{ display: 'grid', gap: 10 }}>
-            <div>
-              <label style={{ display: 'block', color: '#64748b', fontSize: 12, marginBottom: 4 }}>Username</label>
-              <input type="text" value={state.authUsername} onChange={(e) => update({ authUsername: e.target.value })} style={{ width: '100%' }} />
-            </div>
-            <div>
-              <label style={{ display: 'block', color: '#64748b', fontSize: 12, marginBottom: 4 }}>Password</label>
-              <input type="password" value={state.authPassword} onChange={(e) => update({ authPassword: e.target.value })} style={{ width: '100%' }} />
-            </div>
-          </div>
-        )}
-
-        {state.authType === 'api_key' && (
-          <div style={{ display: 'grid', gap: 10 }}>
-            <div>
-              <label style={{ display: 'block', color: '#64748b', fontSize: 12, marginBottom: 4 }}>Header Name</label>
-              <input type="text" value={state.authHeaderName} onChange={(e) => update({ authHeaderName: e.target.value })} placeholder="X-API-Key" style={{ width: '100%' }} />
-            </div>
-            <div>
-              <label style={{ display: 'block', color: '#64748b', fontSize: 12, marginBottom: 4 }}>API Key</label>
-              <input type="password" value={state.authApiKey} onChange={(e) => update({ authApiKey: e.target.value })} style={{ width: '100%' }} />
-            </div>
-          </div>
-        )}
-
-        {state.authType === 'cookie' && (
-          <div>
-            <label style={{ display: 'block', color: '#64748b', fontSize: 12, marginBottom: 4 }}>Cookies</label>
-            {state.authCookies.map((p, i) => (
-              <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
-                <input type="text" placeholder="name" value={p.key} onChange={(e) => updatePair('authCookies', i, e.target.value, p.value)} style={{ flex: 1 }} />
-                <input type="text" placeholder="value" value={p.value} onChange={(e) => updatePair('authCookies', i, p.key, e.target.value)} style={{ flex: 2 }} />
-                <button className="danger" onClick={() => removePair('authCookies', i)}>×</button>
+        <AnimatePresence mode="wait">
+          {state.authType === 'bearer' && (
+            <motion.div key="bearer" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+              <FormLabel>Token</FormLabel>
+              <Input type="password" value={state.authToken} onChange={(e) => update({ authToken: e.target.value })} />
+            </motion.div>
+          )}
+          {state.authType === 'basic' && (
+            <motion.div key="basic" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-3">
+              <div>
+                <FormLabel>Username</FormLabel>
+                <Input value={state.authUsername} onChange={(e) => update({ authUsername: e.target.value })} />
               </div>
-            ))}
-            <button className="secondary" onClick={() => addPair('authCookies')}>+ Add Cookie</button>
-          </div>
-        )}
-      </div>
+              <div>
+                <FormLabel>Password</FormLabel>
+                <Input type="password" value={state.authPassword} onChange={(e) => update({ authPassword: e.target.value })} />
+              </div>
+            </motion.div>
+          )}
+          {state.authType === 'api_key' && (
+            <motion.div key="api_key" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-3">
+              <div>
+                <FormLabel>Header Name</FormLabel>
+                <Input value={state.authHeaderName} onChange={(e) => update({ authHeaderName: e.target.value })} placeholder="X-API-Key" />
+              </div>
+              <div>
+                <FormLabel>API Key</FormLabel>
+                <Input type="password" value={state.authApiKey} onChange={(e) => update({ authApiKey: e.target.value })} />
+              </div>
+            </motion.div>
+          )}
+          {state.authType === 'cookie' && (
+            <motion.div key="cookie" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+              <FormLabel>Cookies</FormLabel>
+              <KeyValueList
+                pairs={state.authCookies}
+                field="authCookies"
+                keyPlaceholder="name"
+                valuePlaceholder="value"
+                onAdd={() => addPair('authCookies')}
+                onUpdate={(i, k, v) => updatePair('authCookies', i, k, v)}
+                onRemove={(i) => removePair('authCookies', i)}
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </CollapsibleSection>
 
       {/* Endpoints */}
-      <div style={{ border: '1px solid #334155', borderRadius: 6, padding: 12 }}>
-        <div style={{ fontWeight: 600, color: '#e2e8f0', fontSize: 13, marginBottom: 10 }}>Endpoints</div>
-        <div style={{ display: 'grid', gap: 10 }}>
-          <div>
-            <label style={{ display: 'block', color: '#64748b', fontSize: 12, marginBottom: 4 }}>Health Check URL (optional)</label>
-            <input type="text" value={state.healthCheckUrl} onChange={(e) => update({ healthCheckUrl: e.target.value })} placeholder="/api/health" style={{ width: '100%' }} />
+      <CollapsibleSection title="Endpoints" icon={<Globe size={13} />} defaultOpen>
+        <div>
+          <FormLabel>Health Check URL</FormLabel>
+          <Input
+            value={state.healthCheckUrl}
+            onChange={(e) => update({ healthCheckUrl: e.target.value })}
+            placeholder="/api/health"
+          />
+        </div>
+        <div className="flex gap-3">
+          <div className="flex-[3]">
+            <FormLabel required>Create Ticket URL</FormLabel>
+            <Input
+              value={state.createTicketUrl}
+              onChange={(e) => update({ createTicketUrl: e.target.value })}
+              placeholder="/api/v1/tickets"
+            />
           </div>
-          <div style={{ display: 'flex', gap: 10 }}>
-            <div style={{ flex: 3 }}>
-              <label style={{ display: 'block', color: '#64748b', fontSize: 12, marginBottom: 4 }}>Create Ticket URL *</label>
-              <input type="text" value={state.createTicketUrl} onChange={(e) => update({ createTicketUrl: e.target.value })} placeholder="/api/v1/tickets" style={{ width: '100%' }} />
-            </div>
-            <div style={{ flex: 1 }}>
-              <label style={{ display: 'block', color: '#64748b', fontSize: 12, marginBottom: 4 }}>Method</label>
-              <select value={state.createTicketMethod} onChange={(e) => update({ createTicketMethod: e.target.value })} style={{ width: '100%' }}>
-                <option>POST</option>
-                <option>PUT</option>
-                <option>PATCH</option>
-              </select>
-            </div>
+          <div className="flex-1">
+            <FormLabel>Method</FormLabel>
+            <StyledSelect value={state.createTicketMethod} onChange={(v) => update({ createTicketMethod: v })}>
+              <option>POST</option>
+              <option>PUT</option>
+              <option>PATCH</option>
+            </StyledSelect>
           </div>
         </div>
-      </div>
+      </CollapsibleSection>
 
       {/* Headers */}
-      <div style={{ border: '1px solid #334155', borderRadius: 6, padding: 12 }}>
-        <div style={{ fontWeight: 600, color: '#e2e8f0', fontSize: 13, marginBottom: 10 }}>Headers (optional)</div>
-        {state.headers.map((p, i) => (
-          <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
-            <input type="text" placeholder="Header" value={p.key} onChange={(e) => updatePair('headers', i, e.target.value, p.value)} style={{ flex: 1 }} />
-            <input type="text" placeholder="Value" value={p.value} onChange={(e) => updatePair('headers', i, p.key, e.target.value)} style={{ flex: 2 }} />
-            <button className="danger" onClick={() => removePair('headers', i)}>×</button>
-          </div>
-        ))}
-        <button className="secondary" onClick={() => addPair('headers')}>+ Add Header</button>
-      </div>
+      <CollapsibleSection title="Headers" icon={<ChevronDown size={13} />}>
+        <KeyValueList
+          pairs={state.headers}
+          field="headers"
+          keyPlaceholder="Content-Type"
+          valuePlaceholder="application/json"
+          onAdd={() => addPair('headers')}
+          onUpdate={(i, k, v) => updatePair('headers', i, k, v)}
+          onRemove={(i) => removePair('headers', i)}
+        />
+      </CollapsibleSection>
 
       {/* Body Template */}
-      <div style={{ border: '1px solid #334155', borderRadius: 6, padding: 12 }}>
-        <div style={{ fontWeight: 600, color: '#e2e8f0', fontSize: 13, marginBottom: 10 }}>Body Template (JSON) *</div>
-        <div style={{ fontSize: 11, color: '#64748b', marginBottom: 8 }}>
-          Available: <code>{BUG_VARIABLES.map((v) => `{{bug.${v}}}`).join(' ')}</code>
-          {' '}and <code>{'{{var.baseUrl}} {{var.YOUR_KEY}}'}</code>
+      <CollapsibleSection title="Body Template (JSON)" icon={<XCircle size={13} />} defaultOpen>
+        <div className="text-[11px] text-th-3 font-mono leading-relaxed bg-th-bg border border-th rounded-md px-3 py-2 mb-2">
+          {BUG_VARIABLES.map((v) => `{{bug.${v}}}`).join('  ')}
+          {'  '}
+          <span className="text-th-3">{'{{var.baseUrl}} {{var.YOUR_KEY}}'}</span>
         </div>
         <textarea
           value={state.bodyTemplateString}
           onChange={(e) => update({ bodyTemplateString: e.target.value })}
           rows={10}
-          style={{ width: '100%', fontFamily: 'monospace', fontSize: 12 }}
+          className="w-full bg-th-surface border border-th rounded-md text-xs text-th font-mono px-3 py-2.5 outline-none focus:border-indigo-500 transition-colors duration-150 resize-y"
         />
-        {bodyJsonError && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 4 }}>{bodyJsonError}</div>}
-      </div>
+        {bodyJsonError && (
+          <div className="flex items-center gap-1.5 text-red-400 text-[11px] mt-1">
+            <AlertCircle size={11} />
+            {bodyJsonError}
+          </div>
+        )}
+      </CollapsibleSection>
 
       {/* Response Mapping */}
-      <div style={{ border: '1px solid #334155', borderRadius: 6, padding: 12 }}>
-        <div style={{ fontWeight: 600, color: '#e2e8f0', fontSize: 13, marginBottom: 10 }}>Response Mapping</div>
-        <div style={{ display: 'grid', gap: 10 }}>
-          <div>
-            <label style={{ display: 'block', color: '#64748b', fontSize: 12, marginBottom: 4 }}>Ticket ID Path *</label>
-            <input type="text" value={state.ticketIdPath} onChange={(e) => update({ ticketIdPath: e.target.value })} placeholder="data.id" style={{ width: '100%' }} />
-          </div>
-          <div>
-            <label style={{ display: 'block', color: '#64748b', fontSize: 12, marginBottom: 4 }}>Ticket URL Path (optional)</label>
-            <input type="text" value={state.ticketUrlPath} onChange={(e) => update({ ticketUrlPath: e.target.value })} placeholder="data.url" style={{ width: '100%' }} />
-          </div>
+      <CollapsibleSection title="Response Mapping" icon={<CheckCircle2 size={13} />} defaultOpen>
+        <div>
+          <FormLabel required>Ticket ID Path</FormLabel>
+          <Input
+            value={state.ticketIdPath}
+            onChange={(e) => update({ ticketIdPath: e.target.value })}
+            placeholder="data.id"
+            className="font-mono"
+          />
+          <p className="text-[11px] text-th-3 mt-1">JSONPath into response body to extract the ticket ID.</p>
         </div>
-      </div>
+        <div>
+          <FormLabel>Ticket URL Path</FormLabel>
+          <Input
+            value={state.ticketUrlPath}
+            onChange={(e) => update({ ticketUrlPath: e.target.value })}
+            placeholder="data.url"
+            className="font-mono"
+          />
+        </div>
+      </CollapsibleSection>
 
       {/* Variables */}
-      <div style={{ border: '1px solid #334155', borderRadius: 6, padding: 12 }}>
-        <div style={{ fontWeight: 600, color: '#e2e8f0', fontSize: 13, marginBottom: 10 }}>Template Variables (optional)</div>
-        <div style={{ fontSize: 11, color: '#64748b', marginBottom: 8 }}>
-          Custom values available as <code>{'{{var.key}}'}</code> in URLs, headers, and body.
-        </div>
-        {state.variables.map((p, i) => (
-          <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
-            <input type="text" placeholder="key" value={p.key} onChange={(e) => updatePair('variables', i, e.target.value, p.value)} style={{ flex: 1 }} />
-            <input type="text" placeholder="value" value={p.value} onChange={(e) => updatePair('variables', i, p.key, e.target.value)} style={{ flex: 2 }} />
-            <button className="danger" onClick={() => removePair('variables', i)}>×</button>
-          </div>
-        ))}
-        <button className="secondary" onClick={() => addPair('variables')}>+ Add Variable</button>
-      </div>
+      <CollapsibleSection title="Template Variables" icon={<Puzzle size={13} />}>
+        <p className="text-[11px] text-th-3">
+          Custom values available as <code className="font-mono text-th-3">{'{{var.key}}'}</code> in URLs, headers, and body.
+        </p>
+        <KeyValueList
+          pairs={state.variables}
+          field="variables"
+          keyPlaceholder="key"
+          valuePlaceholder="value"
+          onAdd={() => addPair('variables')}
+          onUpdate={(i, k, v) => updatePair('variables', i, k, v)}
+          onRemove={(i) => removePair('variables', i)}
+        />
+      </CollapsibleSection>
     </div>
   );
 }

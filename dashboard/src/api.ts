@@ -60,6 +60,8 @@ export const api = {
       }),
     resendVerification: () =>
       request<{ message: string }>('/auth/resend-verification', { method: 'POST' }),
+    logout: () =>
+      request<{ message: string }>('/auth/logout', { method: 'POST' }),
   },
 
   projects: {
@@ -188,8 +190,10 @@ export const api = {
   },
 
   clusters: {
-    list: (projectId: string) =>
-      request<{ clusters: Cluster[] }>(`/projects/${projectId}/clusters`),
+    list: (projectId: string, page = 1, limit = 20) =>
+      request<{ clusters: Cluster[]; total: number; page: number; limit: number }>(
+        `/projects/${projectId}/clusters?page=${page}&limit=${limit}`
+      ),
     detail: (projectId: string, clusterId: string, days?: number) =>
       request<{ cluster: ClusterDetail; bugs: ClusterBug[]; trend: TrendPoint[] }>(
         `/projects/${projectId}/clusters/${clusterId}${days ? `?days=${days}` : ''}`

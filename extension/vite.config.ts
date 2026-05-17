@@ -2,6 +2,15 @@ import { defineConfig, Plugin, build } from 'vite';
 import react from '@vitejs/plugin-react';
 import { resolve } from 'path';
 import fs from 'fs';
+import { execSync } from 'child_process';
+
+function getGitSha(): string {
+  try {
+    return execSync('git rev-parse HEAD', { encoding: 'utf-8' }).trim();
+  } catch {
+    return `build-${Date.now()}`;
+  }
+}
 
 function fixPopupPath(): Plugin {
   return {
@@ -27,13 +36,17 @@ const contentScripts = [
 ];
 
 // Content scripts cannot use ES module imports — build as IIFE with all deps inlined
-function buildContentScripts(): Plugin {
+function buildContentScripts(releaseSha: string): Plugin {
   return {
     name: 'build-content-scripts',
     async closeBundle() {
       for (const name of contentScripts) {
         await build({
           configFile: false,
+          define: {
+            'window.__BI_RELEASE__': JSON.stringify(releaseSha),
+            '__BI_RELEASE__': JSON.stringify(releaseSha),
+          },
           build: {
             sourcemap: true,
             outDir: resolve(__dirname, 'dist/content'),
@@ -56,8 +69,14 @@ function buildContentScripts(): Plugin {
   };
 }
 
+const RELEASE_SHA = getGitSha();
+
 export default defineConfig({
-  plugins: [react(), fixPopupPath(), buildContentScripts()],
+  plugins: [react(), fixPopupPath(), buildContentScripts(RELEASE_SHA)],
+  define: {
+    'window.__BI_RELEASE__': JSON.stringify(RELEASE_SHA),
+    '__BI_RELEASE__': JSON.stringify(RELEASE_SHA),
+  },
   build: {
     sourcemap: true,
     outDir: 'dist',

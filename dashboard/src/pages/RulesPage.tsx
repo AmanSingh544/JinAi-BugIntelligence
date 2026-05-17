@@ -1,7 +1,14 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Shield, Plus, X, Trash2, Play, Pause, AlertCircle } from 'lucide-react';
 import { request } from '../api';
 import { useAuth } from '../hooks/useAuth';
+import { Button } from '../components/ui/Button';
+import { Input, Select } from '../components/ui/Input';
+import { Card } from '../components/ui/Card';
+import { EmptyState } from '../components/ui/EmptyState';
+import { cn } from '../lib/utils';
 
 interface Rule {
   id: string;
@@ -19,10 +26,14 @@ const FIELDS = [
   { value: 'cluster.occurrences', label: 'Occurrences' },
   { value: 'session.unique_users', label: 'Unique Users' },
 ];
-
 const OPS = ['=', '>=', '<=', '>'];
-
 const ACTIONS = ['auto_dispatch', 'notify', 'ignore'];
+
+const ACTION_LABELS: Record<string, string> = {
+  auto_dispatch: 'Auto-dispatch',
+  notify: 'Notify',
+  ignore: 'Ignore',
+};
 
 export default function RulesPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -35,23 +46,16 @@ export default function RulesPage() {
   const [conditions, setConditions] = useState<Array<{ field: string; op: string; value: string }>>([{ field: 'error.severity', op: '>=', value: 'high' }]);
   const [action, setAction] = useState('auto_dispatch');
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
 
-  useEffect(() => {
-    if (!projectId) return;
-    loadRules();
-  }, [projectId]);
+  useEffect(() => { if (projectId) void loadRules(); }, [projectId]);
 
   async function loadRules() {
     if (!projectId) return;
     setLoading(true);
-    try {
-      const rows = await request<Rule[]>(`/projects/${projectId}/rules`);
-      setRules(rows);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
+    try { setRules(await request<Rule[]>(`/projects/${projectId}/rules`)); }
+    catch (e) { setError((e as Error).message); }
+    finally { setLoading(false); }
   }
 
   async function createRule() {
@@ -60,133 +64,167 @@ export default function RulesPage() {
     try {
       await request(`/projects/${projectId}/rules`, {
         method: 'POST',
-        body: JSON.stringify({
-          name,
-          conditions: { operator, conditions },
-          action,
-        }),
+        body: JSON.stringify({ name, conditions: { operator, conditions }, action }),
       });
       setShowAdd(false);
       setName('');
       setConditions([{ field: 'error.severity', op: '>=', value: 'high' }]);
       await loadRules();
-    } catch (err) {
-      console.error(err);
-      alert('Failed to create rule');
-    } finally {
-      setSaving(false);
-    }
+    } catch (e) { setError((e as Error).message); }
+    finally { setSaving(false); }
   }
 
   async function toggleRule(id: string) {
     if (!projectId) return;
-    try {
-      await request(`/projects/${projectId}/rules/${id}/toggle`, { method: 'POST' });
-      await loadRules();
-    } catch (err) {
-      console.error(err);
-    }
+    try { await request(`/projects/${projectId}/rules/${id}/toggle`, { method: 'POST' }); await loadRules(); }
+    catch { /* quiet */ }
   }
 
   async function deleteRule(id: string) {
-    if (!projectId) return;
-    if (!confirm('Delete this rule?')) return;
-    try {
-      await request(`/projects/${projectId}/rules/${id}`, { method: 'DELETE' });
-      await loadRules();
-    } catch (err) {
-      console.error(err);
-    }
+    if (!projectId || !confirm('Delete this rule?')) return;
+    try { await request(`/projects/${projectId}/rules/${id}`, { method: 'DELETE' }); await loadRules(); }
+    catch { /* quiet */ }
   }
 
-  if (loading) return <div style={{ padding: 24, color: '#e2e8f0' }}>Loading...</div>;
+  const canEdit = projectId ? canManage(projectId) : false;
 
   return (
-    <div style={{ maxWidth: 800, margin: '0 auto', padding: 24 }}>
-      <h1 style={{ color: '#e2e8f0', marginBottom: 24 }}>Rules</h1>
+    <div className="flex flex-col h-full">
+      <div className="sticky top-0 z-10 bg-th-bg px-6 pt-2 pb-1 border-th-sub flex items-center justify-between">
+        <div>
+          <h1 className="text-base font-bold text-th">Rules</h1>
+          <p className="text-xs text-th-3 mt-0.5">Automate actions based on error conditions</p>
+        </div>
+        {canEdit && (
+          <Button size="sm" variant="secondary" onClick={() => setShowAdd((v) => !v)}>
+            {showAdd ? <X size={12} /> : <Plus size={12} />}
+            {showAdd ? 'Cancel' : 'Add Rule'}
+          </Button>
+        )}
+      </div>
+      <div className="p-6 max-w-100% mx-auto w-full">
 
-      {projectId && canManage(projectId) && (
-        <button onClick={() => setShowAdd(!showAdd)} style={{ marginBottom: 16 }}>
-          {showAdd ? 'Cancel' : '+ Add Rule'}
-        </button>
-      )}
-
-      {showAdd && (
-        <div className="card" style={{ padding: 20, marginBottom: 24 }}>
-          <div style={{ marginBottom: 12 }}>
-            <label style={{ display: 'block', color: '#64748b', fontSize: 12, marginBottom: 4 }}>Name</label>
-            <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Critical errors auto-dispatch" />
-          </div>
-
-          <div style={{ marginBottom: 12 }}>
-            <label style={{ display: 'block', color: '#64748b', fontSize: 12, marginBottom: 4 }}>Match</label>
-            <select value={operator} onChange={(e) => setOperator(e.target.value as 'all' | 'any')}>
-              <option value="all">All conditions</option>
-              <option value="any">Any condition</option>
-            </select>
-          </div>
-
-          {conditions.map((c, idx) => (
-            <div key={idx} style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' }}>
-              <select value={c.field} onChange={(e) => {
-                const next = [...conditions];
-                next[idx].field = e.target.value;
-                setConditions(next);
-              }}>
-                {FIELDS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
-              </select>
-              <select value={c.op} onChange={(e) => {
-                const next = [...conditions];
-                next[idx].op = e.target.value;
-                setConditions(next);
-              }}>
-                {OPS.map((o) => <option key={o} value={o}>{o}</option>)}
-              </select>
-              <input type="text" value={c.value} onChange={(e) => {
-                const next = [...conditions];
-                next[idx].value = e.target.value;
-                setConditions(next);
-              }} style={{ width: 100 }} />
-              <button className="danger" onClick={() => setConditions(conditions.filter((_, i) => i !== idx))}>×</button>
-            </div>
-          ))}
-          <button className="secondary" onClick={() => setConditions([...conditions, { field: 'error.severity', op: '>=', value: 'high' }])}>+ Condition</button>
-
-          <div style={{ marginTop: 12, marginBottom: 12 }}>
-            <label style={{ display: 'block', color: '#64748b', fontSize: 12, marginBottom: 4 }}>Action</label>
-            <select value={action} onChange={(e) => setAction(e.target.value)}>
-              {ACTIONS.map((a) => <option key={a} value={a}>{a}</option>)}
-            </select>
-          </div>
-
-          <button onClick={createRule} disabled={saving}>{saving ? 'Saving...' : 'Save Rule'}</button>
+      {error && (
+        <div className="flex items-center gap-2 text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-md px-3 py-2 mb-4">
+          <AlertCircle size={12} /> {error}
         </div>
       )}
 
-      {rules.length === 0 ? (
-        <p style={{ color: '#64748b' }}>No rules configured.</p>
-      ) : (
-        <div style={{ display: 'grid', gap: 12 }}>
-          {rules.map((r) => (
-            <div key={r.id} className="card" style={{ padding: 16 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <div style={{ fontWeight: 600, color: '#e2e8f0' }}>{r.name}</div>
-                  <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>
-                    {r.is_active ? 'Active' : 'Inactive'} · {r.action} · {r.conditions?.operator ?? 'all'} ({r.conditions?.conditions?.length ?? 0} conditions)
+      <AnimatePresence>
+        {showAdd && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden mb-4"
+          >
+            <Card>
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[11px] font-medium text-th-3 block mb-1.5">Rule Name</label>
+                    <Input
+                      placeholder="Critical errors → dispatch"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-medium text-th-3 block mb-1.5">Match</label>
+                    <Select value={operator} onChange={(e) => setOperator(e.target.value as 'all' | 'any')} className="w-full">
+                      <option value="all">All conditions</option>
+                      <option value="any">Any condition</option>
+                    </Select>
                   </div>
                 </div>
-                {projectId && canManage(projectId) && (
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <button className="secondary" onClick={() => toggleRule(r.id)}>{r.is_active ? 'Pause' : 'Activate'}</button>
-                    <button className="danger" onClick={() => deleteRule(r.id)}>Delete</button>
-                  </div>
-                )}
+
+                <div className="space-y-2">
+                  <div className="text-[10px] font-semibold text-th-3 uppercase tracking-widest">Conditions</div>
+                  {conditions.map((c, idx) => (
+                    <div key={idx} className="flex gap-2 items-center">
+                      <Select value={c.field} onChange={(e) => { const n = [...conditions]; n[idx].field = e.target.value; setConditions(n); }} className="flex-1">
+                        {FIELDS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
+                      </Select>
+                      <Select value={c.op} onChange={(e) => { const n = [...conditions]; n[idx].op = e.target.value; setConditions(n); }} className="w-16">
+                        {OPS.map((o) => <option key={o} value={o}>{o}</option>)}
+                      </Select>
+                      <Input
+                        className="w-24"
+                        value={c.value}
+                        onChange={(e) => { const n = [...conditions]; n[idx].value = e.target.value; setConditions(n); }}
+                      />
+                      <Button size="sm" variant="ghost" onClick={() => setConditions(conditions.filter((_, i) => i !== idx))}>
+                        <X size={12} />
+                      </Button>
+                    </div>
+                  ))}
+                  <Button size="sm" variant="ghost" onClick={() => setConditions([...conditions, { field: 'error.severity', op: '>=', value: 'high' }])}>
+                    <Plus size={12} /> Add Condition
+                  </Button>
+                </div>
+
+                <div>
+                  <label className="text-[11px] font-medium text-th-3 block mb-1.5">Action</label>
+                  <Select value={action} onChange={(e) => setAction(e.target.value)} className="w-48">
+                    {ACTIONS.map((a) => <option key={a} value={a}>{ACTION_LABELS[a] ?? a}</option>)}
+                  </Select>
+                </div>
+
+                <Button size="sm" loading={saving} onClick={() => void createRule()} disabled={!name}>
+                  Save Rule
+                </Button>
               </div>
-            </div>
+            </Card>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {loading ? (
+        <div className="space-y-2">
+          {[1,2,3].map(i => <div key={i} className="h-16 bg-th-surface border border-th rounded-lg animate-pulse" />)}
+        </div>
+      ) : rules.length === 0 ? (
+        <EmptyState
+          icon={<Shield size={18} />}
+          title="No rules configured"
+          description="Rules auto-dispatch, notify, or ignore bugs based on conditions you define."
+          action={canEdit ? <Button size="sm" variant="secondary" onClick={() => setShowAdd(true)}><Plus size={12} /> Add first rule</Button> : undefined}
+        />
+      ) : (
+        <div className="space-y-2">
+          {rules.map((r) => (
+            <motion.div
+              key={r.id}
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="flex items-center justify-between gap-3 bg-th-surface border border-th rounded-lg px-4 py-3"
+            >
+              <div className="flex items-center gap-3">
+                <div className={cn('w-2 h-2 rounded-full flex-shrink-0', r.is_active ? 'bg-green-400' : 'bg-zinc-600')} />
+                <div>
+                  <div className="text-xs font-medium text-th">{r.name}</div>
+                  <div className="text-[10px] text-th-3 mt-0.5">
+                    {ACTION_LABELS[r.action] ?? r.action} · {r.conditions?.operator} ({r.conditions?.conditions?.length ?? 0} condition{r.conditions?.conditions?.length !== 1 ? 's' : ''})
+                  </div>
+                </div>
+              </div>
+              {canEdit && (
+                <div className="flex items-center gap-2">
+                  <Button size="xs" variant="ghost" onClick={() => void toggleRule(r.id)}>
+                    {r.is_active ? <Pause size={11} /> : <Play size={11} />}
+                    {r.is_active ? 'Pause' : 'Activate'}
+                  </Button>
+                  <Button size="xs" variant="danger" onClick={() => void deleteRule(r.id)}>
+                    <Trash2 size={10} />
+                  </Button>
+                </div>
+              )}
+            </motion.div>
           ))}
         </div>
       )}
+      </div>
     </div>
   );
 }

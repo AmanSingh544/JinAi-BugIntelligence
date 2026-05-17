@@ -99,7 +99,7 @@ const pendingMessages: Array<{
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 
-chrome.storage.local.get(['apiKey', 'ingestUrl', 'enabled', 'sessionId', 'captureTabId'], async (result) => {
+chrome.storage.local.get(['apiKey', 'ingestUrl', 'enabled', 'sessionId', 'captureTabId', 'releaseTag'], async (result) => {
   config = {
     apiKey: result.apiKey ?? '',
     ingestUrl: result.ingestUrl ?? DEFAULT_INGEST_URL,
@@ -107,6 +107,7 @@ chrome.storage.local.get(['apiKey', 'ingestUrl', 'enabled', 'sessionId', 'captur
   };
   sessionId = result.sessionId ?? null;
   captureTabId = result.captureTabId ?? null;
+  currentReleaseTag = result.releaseTag ?? undefined;
 
   await loadRuntimeConfig();
 
@@ -160,6 +161,7 @@ function handleMessage(
 
   if (message.release) {
     currentReleaseTag = message.release;
+    chrome.storage.local.set({ releaseTag: message.release });
   }
 
   if (message.type === 'CAPTURE_EVENT' && message.event) {

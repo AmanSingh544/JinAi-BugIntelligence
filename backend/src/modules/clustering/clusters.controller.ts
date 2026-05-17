@@ -13,14 +13,27 @@ export class ClustersController {
   constructor(private readonly prisma: PrismaService) {}
 
   @Get()
-  async list(@Param('projectId') projectId: string) {
-    const clusters = await this.prisma.errorCluster.findMany({
-      where: { project_id: projectId },
-      orderBy: { occurrence_count: 'desc' },
-      include: {
-        bug: { select: { id: true, summary: true, severity: true, status: true } },
-      },
-    });
+  async list(
+    @Param('projectId') projectId: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const pageNum = Math.max(1, parseInt(page ?? '1', 10));
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit ?? '10', 10)));
+    const skip = (pageNum - 1) * limitNum;
+
+    const [total, clusters] = await Promise.all([
+      this.prisma.errorCluster.count({ where: { project_id: projectId } }),
+      this.prisma.errorCluster.findMany({
+        where: { project_id: projectId },
+        orderBy: { occurrence_count: 'desc' },
+        include: {
+          bug: { select: { id: true, summary: true, severity: true, status: true } },
+        },
+        skip,
+        take: limitNum,
+      }),
+    ]);
 
     const since = new Date();
     since.setDate(since.getDate() - 30);
@@ -44,7 +57,7 @@ export class ClustersController {
       }),
     );
 
-    return { clusters: result };
+    return { clusters: result, total, page: pageNum, limit: limitNum };
   }
 
   @Get(':clusterId')

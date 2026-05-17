@@ -21,6 +21,7 @@ const AuthContext = createContext<AuthState & {
   canAssign(projectId: string): boolean;
   canResolve(projectId: string): boolean;
   isViewer(projectId: string): boolean;
+  refresh(): Promise<void>;
 }>({
   user: null,
   memberships: [],
@@ -30,21 +31,27 @@ const AuthContext = createContext<AuthState & {
   canAssign: () => false,
   canResolve: () => false,
   isViewer: () => false,
+  refresh: async () => {},
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AuthState>({ user: null, memberships: [], loading: true });
 
-  useEffect(() => {
+  const fetchMe = useCallback(async () => {
     const token = localStorage.getItem('token');
     if (!token) {
       setState({ user: null, memberships: [], loading: false });
       return;
     }
-    api.auth.me()
-      .then((user) => setState({ user: { id: user.id, email: user.email, emailVerified: user.emailVerified }, memberships: user.memberships as Membership[], loading: false }))
-      .catch(() => setState({ user: null, memberships: [], loading: false }));
+    try {
+      const user = await api.auth.me();
+      setState({ user: { id: user.id, email: user.email, emailVerified: user.emailVerified }, memberships: user.memberships as Membership[], loading: false });
+    } catch {
+      setState({ user: null, memberships: [], loading: false });
+    }
   }, []);
+
+  useEffect(() => { void fetchMe(); }, [fetchMe]);
 
   const roleFor = useCallback((projectId: string): TenantRole | undefined => {
     for (const m of state.memberships) {
@@ -73,7 +80,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [roleFor]);
 
   return (
-    <AuthContext.Provider value={{ ...state, roleFor, canManage, canAssign, canResolve, isViewer }}>
+    <AuthContext.Provider value={{ ...state, roleFor, canManage, canAssign, canResolve, isViewer, refresh: fetchMe }}>
       {children}
     </AuthContext.Provider>
   );

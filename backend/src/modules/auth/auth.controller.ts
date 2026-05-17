@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, UseGuards, Req, Res, HttpCode, HttpStatus } from '@nestjs/common';
+import { Body, Controller, Get, Post, UseGuards, Req, Res, HttpCode, HttpStatus, Headers } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 import { AuthGuard } from '@nestjs/passport';
@@ -30,6 +30,15 @@ export class AuthController {
   @Post('login')
   login(@Body() dto: LoginDto) {
     return this.auth.login(dto);
+  }
+
+  @Post('logout')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @HttpCode(HttpStatus.OK)
+  logout(@Headers('authorization') authHeader: string) {
+    const token = authHeader?.replace(/^Bearer\s+/i, '') ?? '';
+    return this.auth.logout(token);
   }
 
   @Get('me')

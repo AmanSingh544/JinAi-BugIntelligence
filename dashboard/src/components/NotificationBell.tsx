@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Bell, CheckCheck, X } from 'lucide-react';
 import { api } from '../api';
 import type { UserNotification } from '../api';
 import { useEventSource } from '../hooks/useEventSource';
+import { cn, formatRelativeTime } from '../lib/utils';
 
 const SEVERITY_COLORS: Record<string, string> = {
-  critical: '#ef4444',
-  high: '#f97316',
-  medium: '#eab308',
-  low: '#22c55e',
+  critical: 'bg-red-400',
+  high: 'bg-orange-400',
+  medium: 'bg-amber-400',
+  low: 'bg-green-400',
 };
 
 export default function NotificationBell() {
@@ -23,45 +26,35 @@ export default function NotificationBell() {
       const res = await api.notifications.list({ limit: 20 });
       setNotifications(res.items);
       setUnreadCount(res.unreadCount);
-    } catch {
-      // silent fail
-    } finally {
-      setLoading(false);
-    }
+    } catch { /* silent */ }
+    finally { setLoading(false); }
   };
 
   const fetchUnreadCount = async () => {
     try {
       const res = await api.notifications.unreadCount();
       setUnreadCount(res.unreadCount);
-    } catch {
-      // silent fail
-    }
+    } catch { /* silent */ }
   };
 
-  const handleSse = useCallback((msg: { event: string; data: unknown }) => {
-    if (msg.event === 'notification:new') {
-      fetchUnreadCount();
-    }
+  const handleSse = useCallback((msg: { event: string }) => {
+    if (msg.event === 'notification:new') void fetchUnreadCount();
   }, []);
-
   useEventSource(handleSse);
 
   useEffect(() => {
-    fetchUnreadCount();
-    const interval = setInterval(fetchUnreadCount, 30000);
+    void fetchUnreadCount();
+    const interval = setInterval(() => void fetchUnreadCount(), 30000);
     return () => clearInterval(interval);
   }, []);
 
   useEffect(() => {
-    if (open) fetchNotifications();
+    if (open) void fetchNotifications();
   }, [open]);
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
-      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+      if (panelRef.current && !panelRef.current.contains(e.target as Node)) setOpen(false);
     }
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
@@ -69,9 +62,7 @@ export default function NotificationBell() {
 
   const markAsRead = async (id: string) => {
     await api.notifications.markAsRead(id);
-    setNotifications((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, read_at: new Date().toISOString() } : n))
-    );
+    setNotifications((prev) => prev.map((n) => n.id === id ? { ...n, read_at: new Date().toISOString() } : n));
     setUnreadCount((c) => Math.max(0, c - 1));
   };
 
@@ -82,148 +73,102 @@ export default function NotificationBell() {
   };
 
   return (
-    <div ref={panelRef} style={{ position: 'relative' }}>
+    <div ref={panelRef} className="relative">
       <button
         onClick={() => setOpen((v) => !v)}
-        style={{
-          background: 'transparent',
-          border: '1px solid #2d3148',
-          borderRadius: 6,
-          padding: '8px 12px',
-          cursor: 'pointer',
-          color: '#e2e8f0',
-          fontSize: 14,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-        }}
-      >
-        🔔
-        {unreadCount > 0 && (
-          <span
-            style={{
-              background: '#ef4444',
-              color: '#fff',
-              borderRadius: 10,
-              padding: '2px 6px',
-              fontSize: 11,
-              fontWeight: 600,
-              minWidth: 18,
-              textAlign: 'center',
-            }}
-          >
-            {unreadCount > 99 ? '99+' : unreadCount}
-          </span>
+        className={cn(
+          'relative w-6 h-6 flex items-center justify-center rounded-md transition-colors duration-150',
+          open ? 'bg-th-surface-2 text-th-2' : 'text-th-3 hover:text-th-2 hover:bg-th-surface-2'
         )}
+        title="Notifications"
+      >
+        <Bell size={13} />
+        <AnimatePresence>
+          {unreadCount > 0 && (
+            <motion.span
+              initial={{ scale: 0 }}
+              animate={{ scale: 1 }}
+              exit={{ scale: 0 }}
+              className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-red-500 text-white text-[8px] font-bold rounded-full flex items-center justify-center leading-none"
+            >
+              {unreadCount > 9 ? '9+' : unreadCount}
+            </motion.span>
+          )}
+        </AnimatePresence>
       </button>
 
-      {open && (
-        <div
-          style={{
-            position: 'absolute',
-            top: 44,
-            right: 0,
-            width: 380,
-            maxHeight: 480,
-            background: '#0f1117',
-            border: '1px solid #2d3148',
-            borderRadius: 8,
-            boxShadow: '0 10px 30px rgba(0,0,0,0.5)',
-            zIndex: 100,
-            display: 'flex',
-            flexDirection: 'column',
-          }}
-        >
-          <div
-            style={{
-              padding: '12px 16px',
-              borderBottom: '1px solid #2d3148',
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-            }}
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95, y: -4 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95, y: -4 }}
+            transition={{ duration: 0.15 }}
+            className="absolute top-10 right-0 w-80 bg-th-surface border border-th rounded-xl shadow-2xl z-50 overflow-hidden"
           >
-            <span style={{ fontWeight: 600, fontSize: 14, color: '#e2e8f0' }}>Notifications</span>
-            {unreadCount > 0 && (
-              <button
-                onClick={markAllAsRead}
-                style={{
-                  background: 'transparent',
-                  border: 'none',
-                  color: '#60a5fa',
-                  fontSize: 12,
-                  cursor: 'pointer',
-                }}
-              >
-                Mark all read
-              </button>
-            )}
-          </div>
-
-          <div style={{ overflowY: 'auto', flex: 1 }}>
-            {loading && (
-              <div style={{ padding: 24, textAlign: 'center', color: '#64748b', fontSize: 13 }}>
-                Loading…
-              </div>
-            )}
-
-            {!loading && notifications.length === 0 && (
-              <div style={{ padding: 24, textAlign: 'center', color: '#64748b', fontSize: 13 }}>
-                No notifications
-              </div>
-            )}
-
-            {notifications.map((n) => (
-              <div
-                key={n.id}
-                onClick={() => !n.read_at && markAsRead(n.id)}
-                style={{
-                  padding: '12px 16px',
-                  borderBottom: '1px solid #1a1d27',
-                  cursor: n.read_at ? 'default' : 'pointer',
-                  opacity: n.read_at ? 0.6 : 1,
-                  background: n.read_at ? 'transparent' : '#1a1d27',
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                  {n.severity && (
-                    <span
-                      style={{
-                        width: 8,
-                        height: 8,
-                        borderRadius: '50%',
-                        background: SEVERITY_COLORS[n.severity] ?? '#64748b',
-                        display: 'inline-block',
-                      }}
-                    />
-                  )}
-                  <span style={{ fontWeight: 600, fontSize: 13, color: '#e2e8f0', flex: 1 }}>
-                    {n.title}
-                  </span>
-                  <span style={{ fontSize: 11, color: '#64748b', whiteSpace: 'nowrap' }}>
-                    {timeAgo(n.created_at)}
-                  </span>
-                </div>
-                {n.body && (
-                  <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.4 }}>{n.body}</div>
+            {/* Header */}
+            <div className="flex items-center justify-between px-4 py-3 border-b border-th">
+              <span className="text-xs font-semibold text-th-2">Notifications</span>
+              <div className="flex items-center gap-2">
+                {unreadCount > 0 && (
+                  <button
+                    onClick={() => void markAllAsRead()}
+                    className="flex items-center gap-1 text-[11px] text-indigo-400 hover:text-indigo-300 transition-colors duration-150"
+                  >
+                    <CheckCheck size={11} /> All read
+                  </button>
                 )}
-                <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>
-                  {n.project?.name}
-                  {n.bug?.summary ? ` · ${n.bug.summary.slice(0, 40)}` : ''}
-                </div>
+                <button onClick={() => setOpen(false)} className="text-th-3 hover:text-th-2 transition-colors duration-150">
+                  <X size={13} />
+                </button>
               </div>
-            ))}
-          </div>
-        </div>
-      )}
+            </div>
+
+            {/* Body */}
+            <div className="max-h-72 overflow-y-auto">
+              {loading ? (
+                <div className="px-4 py-6 text-center text-xs text-th-3">Loading...</div>
+              ) : notifications.length === 0 ? (
+                <div className="px-4 py-8 text-center">
+                  <Bell size={16} className="text-zinc-700 mx-auto mb-2" />
+                  <p className="text-xs text-th-3">No notifications</p>
+                </div>
+              ) : (
+                notifications.map((n) => (
+                  <div
+                    key={n.id}
+                    onClick={() => !n.read_at && void markAsRead(n.id)}
+                    className={cn(
+                      'px-4 py-3 border-b border-th-sub last:border-0 transition-colors duration-150',
+                      !n.read_at && 'bg-th-surface-2/30 cursor-pointer hover:bg-th-surface-2/50',
+                      n.read_at && 'opacity-50'
+                    )}
+                  >
+                    <div className="flex items-start gap-2">
+                      {n.severity && (
+                        <div className={cn('w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0', SEVERITY_COLORS[n.severity] ?? 'bg-zinc-500')} />
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-medium text-th truncate">{n.title}</span>
+                          <span className="text-[10px] text-th-3 whitespace-nowrap flex-shrink-0">
+                            {formatRelativeTime(n.created_at)}
+                          </span>
+                        </div>
+                        {n.body && <p className="text-[11px] text-th-3 mt-0.5 line-clamp-2">{n.body}</p>}
+                        <p className="text-[10px] text-zinc-700 mt-0.5">
+                          {n.project?.name}
+                          {n.bug?.summary ? ` · ${n.bug.summary.slice(0, 40)}` : ''}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
-}
-
-function timeAgo(iso: string): string {
-  const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
-  if (s < 60) return 'now';
-  if (s < 3600) return `${Math.floor(s / 60)}m`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h`;
-  return `${Math.floor(s / 86400)}d`;
 }

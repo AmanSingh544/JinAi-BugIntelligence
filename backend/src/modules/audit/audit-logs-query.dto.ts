@@ -13,7 +13,7 @@ export class AuditLogsQueryDto {
   @IsInt()
   @Min(1)
   @Max(100)
-  limit?: number = 20;
+  limit?: number = 10;
 
   @IsString()
   projectId!: string;

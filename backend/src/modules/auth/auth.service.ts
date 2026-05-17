@@ -1,10 +1,12 @@
-import { Injectable, ConflictException, UnauthorizedException, BadRequestException } from '@nestjs/common';
+import { Injectable, ConflictException, UnauthorizedException, BadRequestException, Inject } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
-import { createHash, randomBytes } from 'crypto';
+import { createHash, randomBytes, randomUUID } from 'crypto';
 import * as nodemailer from 'nodemailer';
+import type Redis from 'ioredis';
 import { PrismaService } from '../../shared/prisma/prisma.service';
+import { REDIS_CLIENT } from '../../shared/redis/redis.provider';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { TenantRole } from '@prisma/client';
@@ -23,6 +25,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
   async register(dto: RegisterDto) {
@@ -245,10 +248,34 @@ export class AuthService {
   }
 
   sign(userId: string, email: string) {
+    const expiresIn = this.config.get<string>('JWT_EXPIRATION', '15m');
     return this.jwt.sign(
-      { sub: userId, email },
-      { secret: this.config.get<string>('JWT_SECRET', 'fallback-secret') },
+      { sub: userId, email, jti: randomUUID() },
+      { secret: this.config.get<string>('JWT_SECRET', 'fallback-secret'), expiresIn },
     );
+  }
+
+  async logout(token: string) {
+    let payload: { jti?: string; exp?: number } | null = null;
+    try {
+      payload = this.jwt.decode(token) as { jti?: string; exp?: number } | null;
+    } catch {
+      // malformed token — nothing to blacklist
+    }
+
+    if (payload?.jti && payload?.exp) {
+      const ttl = payload.exp - Math.floor(Date.now() / 1000);
+      if (ttl > 0) {
+        await this.redis.set(`jwt:bl:${payload.jti}`, '1', 'EX', ttl);
+      }
+    }
+
+    return { message: 'Logged out' };
+  }
+
+  async isTokenBlacklisted(jti: string): Promise<boolean> {
+    const val = await this.redis.get(`jwt:bl:${jti}`);
+    return val !== null;
   }
 
   private getFromAddress(): string {

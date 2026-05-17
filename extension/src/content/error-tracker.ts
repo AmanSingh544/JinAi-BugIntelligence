@@ -19,7 +19,6 @@ window.addEventListener('error', (e: globalThis.ErrorEvent) => {
     },
   };
   flushReplayBuffer(true);
-  flushReplayBuffer(true);
   sendEvent(event);
 });
 
