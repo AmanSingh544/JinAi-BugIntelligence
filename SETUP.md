@@ -681,4 +681,11 @@ bi-upload-sourcemaps `
   --api-url http://localhost:4000/api/v1 `
   dist
 
+## 
+
+### -------------- OR  Run in the repos u want to upload the source files ----------------
+export BUG_INTELLIGENCE_PROJECT_ID=563a5b0f-8fee-4816-9084-0232---dummy
+export BUG_INTELLIGENCE_API_KEY=bi_live_59be82250a161ac80630876127e1a7c7980449ae8ea8a--dummy
+npm run build:console
+
 ## --------------------------------#####-------------------------------------------
