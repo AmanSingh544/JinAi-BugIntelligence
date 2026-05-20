@@ -9,6 +9,7 @@ import { PipelineTrackerService } from '../system/pipeline-tracker.service';
 import { RuleEvaluationJob, RULE_EVALUATION_QUEUE } from './rule-evaluation.queue';
 import { evaluateRule, parseConditions, type Severity } from './rule-evaluator';
 import { MetricsService } from '../../shared/metrics/metrics.service';
+import { FixGenerationQueue } from '../autofix/fix-generation.queue';
 
 const TIME_WINDOW_MINUTES = 60;
 
@@ -24,6 +25,7 @@ export class RuleEvaluationWorker implements OnModuleInit, OnModuleDestroy {
     private readonly notificationService: NotificationService,
     private readonly tracker: PipelineTrackerService,
     private readonly metrics: MetricsService,
+    private readonly fixGenerationQueue: FixGenerationQueue,
   ) {}
 
   onModuleInit() {
@@ -87,10 +89,47 @@ export class RuleEvaluationWorker implements OnModuleInit, OnModuleDestroy {
         await this.prisma.bug.update({ where: { id: bugId }, data: { status: 'ignored' } });
       } else if (rule.action === 'notify') {
         void this.notificationService.sendToProject(projectId, bugId);
+      } else if (rule.action === 'auto_fix') {
+        await this.triggerAutoFix(bugId, projectId, errorId, trackingId, false);
+      } else if (rule.action === 'auto_fix_require_approval') {
+        await this.triggerAutoFix(bugId, projectId, errorId, trackingId, true);
       }
     }
     await this.tracker.recordLatency('rule_evaluation', Date.now() - start);
     });
+  }
+
+  private async triggerAutoFix(
+    bugId: string,
+    projectId: string,
+    errorId: string,
+    trackingId: string | undefined,
+    requireApproval: boolean,
+  ) {
+    // Only queue if a repository is connected
+    const repo = await this.prisma.projectRepository.findUnique({
+      where: { project_id: projectId },
+    });
+    if (!repo) {
+      this.logger.warn(`auto_fix rule matched for bug=${bugId} but no repository connected to project=${projectId}`);
+      return;
+    }
+
+    // Only queue if no active fix attempt already exists
+    const activeAttempt = await this.prisma.bugFixAttempt.findFirst({
+      where: {
+        bug_id: bugId,
+        status: { notIn: ['failed', 'cancelled'] },
+      },
+    });
+    if (activeAttempt) {
+      this.logger.debug(`auto_fix skipped for bug=${bugId} — active attempt ${activeAttempt.id} already exists`);
+      return;
+    }
+
+    await this.fixGenerationQueue.add({ bugId, projectId, errorId, requireApproval, trackingId });
+    await this.prisma.bug.update({ where: { id: bugId }, data: { fix_status: 'fix_pending' } });
+    this.logger.log(`Queued auto_fix for bug=${bugId} requireApproval=${requireApproval}`);
   }
 
   private async triggerDispatch(bugId: string, projectId: string, trackingId?: string) {

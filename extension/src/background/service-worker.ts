@@ -92,6 +92,11 @@ let captureTabId: number | null = null;
 
 // Config is loaded async — queue messages that arrive before it's ready
 let configReady = false;
+const configReadyCallbacks: Array<() => void> = [];
+function onConfigReady(cb: () => void) {
+  if (configReady) { cb(); return; }
+  configReadyCallbacks.push(cb);
+}
 const pendingMessages: Array<{
   message: { type: string; event?: RawEvent; sessionId?: string; release?: string };
   tabId?: number;
@@ -112,12 +117,17 @@ chrome.storage.local.get(['apiKey', 'ingestUrl', 'enabled', 'sessionId', 'captur
   await loadRuntimeConfig();
 
   configReady = true;
+  configReadyCallbacks.splice(0).forEach((cb) => cb());
 
   console.log('[BugIntel] Service worker initialised. enabled=', config.enabled, 'sessionId=', sessionId);
 
   if (config.enabled) {
     startFlushing();
-    startConfigPolling(config.apiKey, config.ingestUrl);
+    // startConfigPolling fetches fresh config then calls broadcastRuntimeConfig via onUpdate
+    startConfigPolling(config.apiKey, config.ingestUrl, undefined, broadcastRuntimeConfig);
+  } else {
+    // Not enabled yet, but broadcast whatever we have cached so tabs know the state
+    broadcastRuntimeConfig();
   }
 
   // Drain any messages that arrived before config loaded
@@ -137,7 +147,7 @@ chrome.storage.onChanged.addListener((changes) => {
     config.enabled = changes.enabled.newValue;
     if (config.enabled) {
       startFlushing();
-      startConfigPolling(config.apiKey, config.ingestUrl);
+      startConfigPolling(config.apiKey, config.ingestUrl, undefined, broadcastRuntimeConfig);
     } else {
       stopFlushing();
       stopConfigPolling();
@@ -198,6 +208,16 @@ function handleMessage(
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Bridge pulls config on load — wait for SW init before responding
+  if ((message as { type: string }).type === 'GET_RUNTIME_CONFIG') {
+    onConfigReady(() => {
+      const cfg = getRuntimeConfig();
+      console.log('[BugIntel] GET_RUNTIME_CONFIG from tab', sender.tab?.id, '→ replayEnabled=', cfg.replayEnabled);
+      sendResponse({ replayEnabled: cfg.replayEnabled });
+    });
+    return true; // keep channel open for async sendResponse
+  }
+
   if (captureTabId != null && sender.tab != null && sender.tab.id !== captureTabId) {
     console.log('[BugIntel] Dropped event from tab', sender.tab.id, '— capturing only tab', captureTabId);
     sendResponse({ ok: true, dropped: true });
@@ -217,6 +237,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   sendResponse({ ok: true });
   return true;
 });
+
+// ── Config broadcast ──────────────────────────────────────────────────────────
+
+function broadcastRuntimeConfig() {
+  const cfg = getRuntimeConfig();
+  console.log('[BugIntel] Broadcasting RUNTIME_CONFIG replayEnabled=', cfg.replayEnabled);
+  chrome.tabs.query({}, (tabs) => {
+    console.log('[BugIntel] Broadcasting to', tabs.length, 'tabs');
+    for (const tab of tabs) {
+      if (tab.id != null) {
+        chrome.tabs.sendMessage(tab.id, { type: 'RUNTIME_CONFIG', replayEnabled: cfg.replayEnabled }).catch((e) => {
+          console.log('[BugIntel] sendMessage to tab', tab.id, 'failed:', e.message);
+        });
+      }
+    }
+  });
+}
 
 // ── Flush ─────────────────────────────────────────────────────────────────────
 
@@ -279,7 +316,18 @@ async function flush() {
 }
 
 async function flushReplay(event: RawEvent) {
-  if (!config?.apiKey || !sessionId) return;
+  const events = (event.payload as { events?: unknown[] }).events ?? [];
+  // Use sessionId from the event itself — the SW global gets overwritten by other tabs
+  const replaySessionId = event.sessionId || sessionId;
+  console.log('[BugIntel] flushReplay called, sessionId=', replaySessionId, 'eventCount=', events.length);
+  if (!config?.apiKey || !replaySessionId) {
+    console.warn('[BugIntel] flushReplay skipped — no apiKey or sessionId');
+    return;
+  }
+  if (events.length === 0) {
+    console.warn('[BugIntel] flushReplay skipped — empty events array');
+    return;
+  }
   try {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -288,16 +336,17 @@ async function flushReplay(event: RawEvent) {
     const envName = getRuntimeConfig().environment;
     if (envName) headers['X-BI-Environment'] = envName;
 
-    const res = await fetch(config.ingestUrl.replace('/ingest/batch', `/sessions/${sessionId}/replay`), {
+    const url = config.ingestUrl.replace('/ingest/batch', `/sessions/${replaySessionId}/replay`);
+    console.log('[BugIntel] POSTing replay to', url);
+    const res = await fetch(url, {
       method: 'POST',
       headers,
-      body: JSON.stringify({
-        sequence: 1,
-        events: (event.payload as { events?: unknown[] }).events ?? [],
-      }),
+      body: JSON.stringify({ sequence: 1, events }),
     });
     if (!res.ok) {
       console.warn('[BugIntel] Replay flush failed:', res.status);
+    } else {
+      console.log('[BugIntel] Replay flush success, events=', events.length);
     }
   } catch (err) {
     console.warn('[BugIntel] Replay flush error:', err);

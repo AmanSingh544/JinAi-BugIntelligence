@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Bell, Trash2, Plus, X, Archive, AlertCircle, CheckCircle2, Loader2 } from 'lucide-react';
-import { api, request, type Environment } from '../api';
+import { Bell, Trash2, Plus, X, Archive, AlertCircle, CheckCircle2, Loader2, GitBranch, Wrench, ExternalLink, Link2Off, ShieldCheck } from 'lucide-react';
+import { api, request, type Environment, type ProjectRepository, type ConnectRepositoryDto } from '../api';
 import { useAuth } from '../hooks/useAuth';
 import { Button } from '../components/ui/Button';
 import { Input, Select } from '../components/ui/Input';
@@ -31,6 +31,7 @@ function getDefaultConfig(provider: string): Record<string, string> {
 
 export default function SettingsPage() {
   const { projectId } = useParams<{ projectId: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { canManage } = useAuth();
   const [envs, setEnvs] = useState<Environment[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -41,13 +42,43 @@ export default function SettingsPage() {
   const [channelName, setChannelName] = useState('');
   const [channelFields, setChannelFields] = useState<Record<string, string>>(() => getDefaultConfig('slack'));
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
+  const [repo, setRepo] = useState<ProjectRepository | null>(null);
+  const [repoLoading, setRepoLoading] = useState(false);
+  const [repoSaving, setRepoSaving] = useState(false);
+  const [showRepoForm, setShowRepoForm] = useState(false);
+  const [validating, setValidating] = useState(false);
+  const [repoForm, setRepoForm] = useState<ConnectRepositoryDto>({
+    github_owner: '',
+    github_repo: '',
+    default_branch: 'main',
+    installation_id: 0,
+    merge_strategy: 'squash',
+    auto_merge_enabled: false,
+    min_severity: 'high',
+    fix_confidence_min: 0.75,
+    source_root_prefix: '',
+  });
 
   useEffect(() => { if (projectId) void loadData(); }, [projectId]);
   useEffect(() => { setChannelFields(getDefaultConfig(channelProvider)); }, [channelProvider]);
 
+  // Auto-fill installation_id and open the connect form when GitHub App redirects back
+  useEffect(() => {
+    if (searchParams.get('github_installed') === '1') {
+      const installationId = parseInt(searchParams.get('installation_id') ?? '0', 10);
+      if (installationId) {
+        setRepoForm((prev) => ({ ...prev, installation_id: installationId }));
+        setShowRepoForm(true);
+      }
+      // Remove the query params so a page refresh doesn't re-trigger this
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams]);
+
   async function loadData() {
     if (!projectId) return;
     setLoading(true);
+    setRepoLoading(true);
     try {
       const [e, c] = await Promise.all([
         api.environments.list(projectId),
@@ -57,6 +88,61 @@ export default function SettingsPage() {
       setChannels(c);
     } catch { /* quiet */ }
     finally { setLoading(false); }
+
+    try {
+      const r = await api.repository.get(projectId);
+      setRepo(r);
+      setRepoForm({
+        github_owner: r.github_owner,
+        github_repo: r.github_repo,
+        default_branch: r.default_branch,
+        installation_id: r.installation_id,
+        merge_strategy: r.merge_strategy,
+        auto_merge_enabled: r.auto_merge_enabled,
+        min_severity: r.min_severity,
+        fix_confidence_min: r.fix_confidence_min,
+        source_root_prefix: r.source_root_prefix,
+      });
+    } catch { setRepo(null); }
+    finally { setRepoLoading(false); }
+  }
+
+  async function saveRepo() {
+    if (!projectId) return;
+    setRepoSaving(true);
+    try {
+      if (repo) {
+        const updated = await api.repository.update(projectId, repoForm);
+        setRepo(updated);
+        showFeedback('success', 'Repository settings saved');
+      } else {
+        const created = await api.repository.connect(projectId, repoForm);
+        setRepo(created);
+        setShowRepoForm(false);
+        showFeedback('success', 'Repository connected');
+      }
+    } catch (err) { showFeedback('error', (err as Error).message); }
+    finally { setRepoSaving(false); }
+  }
+
+  async function disconnectRepo() {
+    if (!projectId || !confirm('Disconnect this repository? Existing fix attempts will not be affected.')) return;
+    try {
+      await api.repository.disconnect(projectId);
+      setRepo(null);
+      setRepoForm({ github_owner: '', github_repo: '', default_branch: 'main', installation_id: 0, merge_strategy: 'squash', auto_merge_enabled: false, min_severity: 'high', fix_confidence_min: 0.75, source_root_prefix: '' });
+      showFeedback('success', 'Repository disconnected');
+    } catch (err) { showFeedback('error', (err as Error).message); }
+  }
+
+  async function validateRepo() {
+    if (!projectId) return;
+    setValidating(true);
+    try {
+      const result = await api.repository.validate(projectId);
+      showFeedback(result.valid ? 'success' : 'error', result.message);
+    } catch (err) { showFeedback('error', (err as Error).message); }
+    finally { setValidating(false); }
   }
 
   function showFeedback(type: 'success' | 'error', msg: string) {
@@ -300,6 +386,201 @@ export default function SettingsPage() {
                   )}
                 </div>
               </Card>
+            </section>
+
+            {/* Autofix Repository */}
+            <section>
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <h2 className="text-sm font-semibold text-th flex items-center gap-2">
+                    <Wrench size={13} className="text-emerald-400" /> Autofix Repository
+                  </h2>
+                  <p className="text-[11px] text-th-3 mt-0.5">Connect a GitHub repository to enable AI-generated fix PRs</p>
+                </div>
+                {canEdit && !repo && (
+                  <Button size="sm" variant="secondary" onClick={() => setShowRepoForm((v) => !v)}>
+                    {showRepoForm ? <X size={12} /> : <Plus size={12} />}
+                    {showRepoForm ? 'Cancel' : 'Connect'}
+                  </Button>
+                )}
+              </div>
+
+              {repoLoading ? (
+                <div className="h-16 bg-th-surface border border-th rounded-lg animate-pulse" />
+              ) : repo ? (
+                <Card>
+                  <div className="flex items-start justify-between gap-4 mb-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center flex-shrink-0">
+                        <GitBranch size={14} className="text-emerald-400" />
+                      </div>
+                      <div>
+                        <div className="text-sm font-semibold text-th font-mono">{repo.github_owner}/{repo.github_repo}</div>
+                        <div className="text-[10px] text-th-3">branch: {repo.default_branch} · installation: {repo.installation_id}</div>
+                      </div>
+                    </div>
+                    {canEdit && (
+                      <div className="flex items-center gap-2">
+                        <Button size="xs" variant="ghost" onClick={() => void validateRepo()} loading={validating}>
+                          <ShieldCheck size={11} /> Validate
+                        </Button>
+                        <Button size="xs" variant="danger" onClick={() => void disconnectRepo()}>
+                          <Link2Off size={11} /> Disconnect
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Editable settings */}
+                  <div className="space-y-3 pt-3 border-t border-th-sub">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[11px] font-medium text-th-3 block mb-1.5">Min Severity for Autofix</label>
+                        <Select
+                          value={repoForm.min_severity ?? 'high'}
+                          onChange={(e) => setRepoForm((p) => ({ ...p, min_severity: e.target.value }))}
+                          disabled={!canEdit}
+                          className="w-full"
+                        >
+                          <option value="low">Low</option>
+                          <option value="medium">Medium</option>
+                          <option value="high">High</option>
+                          <option value="critical">Critical</option>
+                        </Select>
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-medium text-th-3 block mb-1.5">Merge Strategy</label>
+                        <Select
+                          value={repoForm.merge_strategy ?? 'squash'}
+                          onChange={(e) => setRepoForm((p) => ({ ...p, merge_strategy: e.target.value }))}
+                          disabled={!canEdit}
+                          className="w-full"
+                        >
+                          <option value="squash">Squash</option>
+                          <option value="merge">Merge commit</option>
+                          <option value="rebase">Rebase</option>
+                        </Select>
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-medium text-th-3 block mb-1.5">Min AI Confidence</label>
+                        <input
+                          type="number" min={0} max={1} step={0.05}
+                          value={repoForm.fix_confidence_min ?? 0.75}
+                          onChange={(e) => setRepoForm((p) => ({ ...p, fix_confidence_min: parseFloat(e.target.value) }))}
+                          disabled={!canEdit}
+                          className="w-full h-8 bg-th-surface-2 border border-th rounded-md px-2 text-xs text-th-2 focus:outline-none focus:border-indigo-500 disabled:opacity-40"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-medium text-th-3 block mb-1.5">Source Root Prefix</label>
+                        <Input
+                          placeholder="e.g. packages/web"
+                          value={repoForm.source_root_prefix ?? ''}
+                          onChange={(e) => setRepoForm((p) => ({ ...p, source_root_prefix: e.target.value }))}
+                          disabled={!canEdit}
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <ToggleRow
+                        label="Auto-merge on approval"
+                        description="Automatically merge the PR when a reviewer approves it"
+                        checked={repoForm.auto_merge_enabled ?? false}
+                        onChange={(v) => setRepoForm((p) => ({ ...p, auto_merge_enabled: v }))}
+                        disabled={!canEdit}
+                      />
+                    </div>
+                    {canEdit && (
+                      <Button size="sm" onClick={() => void saveRepo()} loading={repoSaving}>
+                        Save Changes
+                      </Button>
+                    )}
+                  </div>
+                </Card>
+              ) : (
+                <>
+                  {!showRepoForm && (
+                    <EmptyState
+                      icon={<GitBranch size={16} />}
+                      title="No repository connected"
+                      description="Connect a GitHub repository to enable autofix PRs."
+                      action={
+                        <a
+                          href={`https://github.com/apps/${import.meta.env.VITE_GITHUB_APP_NAME ?? ''}/installations/new`}
+                          target="_blank" rel="noreferrer"
+                          className="text-indigo-400 hover:text-indigo-300 inline-flex items-center gap-1 text-xs"
+                        >
+                          Install GitHub App first to get an installation ID <ExternalLink size={10} />
+                        </a>
+                      }
+                    />
+                  )}
+                  <AnimatePresence>
+                    {showRepoForm && (
+                      <motion.div
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        exit={{ opacity: 0, height: 0 }}
+                        transition={{ duration: 0.2 }}
+                        className="overflow-hidden"
+                      >
+                        <Card>
+                          <div className="space-y-3">
+                            <div className="grid grid-cols-2 gap-3">
+                              <div>
+                                <label className="text-[11px] font-medium text-th-3 block mb-1.5">GitHub Owner</label>
+                                <Input placeholder="acme-corp" value={repoForm.github_owner} onChange={(e) => setRepoForm((p) => ({ ...p, github_owner: e.target.value }))} />
+                              </div>
+                              <div>
+                                <label className="text-[11px] font-medium text-th-3 block mb-1.5">Repository</label>
+                                <Input placeholder="my-app" value={repoForm.github_repo} onChange={(e) => setRepoForm((p) => ({ ...p, github_repo: e.target.value }))} />
+                              </div>
+                              <div>
+                                <label className="text-[11px] font-medium text-th-3 block mb-1.5">Default Branch</label>
+                                <Input placeholder="main" value={repoForm.default_branch ?? 'main'} onChange={(e) => setRepoForm((p) => ({ ...p, default_branch: e.target.value }))} />
+                              </div>
+                              <div>
+                                <label className="text-[11px] font-medium text-th-3 block mb-1.5">Installation ID</label>
+                                <Input
+                                  type="number"
+                                  placeholder="12345678"
+                                  value={repoForm.installation_id || ''}
+                                  onChange={(e) => setRepoForm((p) => ({ ...p, installation_id: parseInt(e.target.value, 10) || 0 }))}
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[11px] font-medium text-th-3 block mb-1.5">Min Severity</label>
+                                <Select value={repoForm.min_severity ?? 'high'} onChange={(e) => setRepoForm((p) => ({ ...p, min_severity: e.target.value }))} className="w-full">
+                                  <option value="low">Low</option>
+                                  <option value="medium">Medium</option>
+                                  <option value="high">High</option>
+                                  <option value="critical">Critical</option>
+                                </Select>
+                              </div>
+                              <div>
+                                <label className="text-[11px] font-medium text-th-3 block mb-1.5">Merge Strategy</label>
+                                <Select value={repoForm.merge_strategy ?? 'squash'} onChange={(e) => setRepoForm((p) => ({ ...p, merge_strategy: e.target.value }))} className="w-full">
+                                  <option value="squash">Squash</option>
+                                  <option value="merge">Merge commit</option>
+                                  <option value="rebase">Rebase</option>
+                                </Select>
+                              </div>
+                            </div>
+                            <Button
+                              size="sm"
+                              onClick={() => void saveRepo()}
+                              loading={repoSaving}
+                              disabled={!repoForm.github_owner || !repoForm.github_repo || !repoForm.installation_id}
+                            >
+                              Connect Repository
+                            </Button>
+                          </div>
+                        </Card>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </>
+              )}
             </section>
 
             {/* Environments */}

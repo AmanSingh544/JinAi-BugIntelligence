@@ -1,7 +1,7 @@
-import { Body, Controller, ForbiddenException, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, ForbiddenException, Get, Logger, NotFoundException, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { PaginationDto, PaginatedResult } from '../../shared/dto/pagination.dto';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { IsIn } from 'class-validator';
+import { IsIn, IsString } from 'class-validator';
 import { JwtAuthGuard } from '../../shared/guards/jwt-auth.guard';
 import { TenantAuthGuard } from '../auth/tenant-auth.guard';
 import { AuthorizationService } from '../auth/authorization.service';
@@ -15,6 +15,9 @@ import { SearchBugsDto } from './dto/search-bugs.dto';
 import { ArchiveOldBugsDto } from './dto/archive-old-bugs.dto';
 import { bugVisibilityWhere } from '../../shared/helpers/bug-visibility.helper';
 import { ArchiveQueue } from './archive.queue';
+import { FixGenerationQueue } from '../autofix/fix-generation.queue';
+import { GitHubAppService } from '../autofix/github-app.service';
+import { DispatchQueue } from '../integrations/dispatch.queue';
 
 interface SimilarBug {
   id: string;
@@ -40,6 +43,7 @@ class UpdateStatusDto {
 }
 
 class AssignBugDto {
+  @IsString()
   userId!: string;
 }
 
@@ -59,6 +63,9 @@ export class BugsController {
     private readonly audit: AuditService,
     private readonly sse: EventsSseService,
     private readonly archiveQueue: ArchiveQueue,
+    private readonly fixQueue: FixGenerationQueue,
+    private readonly githubApp: GitHubAppService,
+    private readonly dispatchQueue: DispatchQueue,
   ) {}
 
   @Get()
@@ -193,7 +200,76 @@ export class BugsController {
       { event: 'bug:status_changed', data: { bugId, projectId, status: dto.status } },
       (client) => client.tenantId === tenant.tenantId,
     );
+
+    // Close any open autofix PR when bug is manually resolved or archived
+    if (dto.status === 'resolved' || dto.status === 'archived') {
+      void this.closeOpenAutofixPr(bugId);
+    }
+
     return bug;
+  }
+
+  private readonly logger = new Logger(BugsController.name);
+
+  private async closeOpenAutofixPr(bugId: string): Promise<void> {
+    try {
+      const attempt = await this.prisma.bugFixAttempt.findFirst({
+        where: { bug_id: bugId, status: 'pr_open' },
+        include: { repository: true },
+      });
+      if (!attempt || !attempt.pr_number) return;
+
+      const { installation_id, github_owner, github_repo } = attempt.repository;
+      const res = await this.githubApp.apiRequest(
+        installation_id,
+        `/repos/${github_owner}/${github_repo}/pulls/${attempt.pr_number}`,
+        { method: 'PATCH', body: JSON.stringify({ state: 'closed' }) },
+      );
+      if (!res.ok) {
+        this.logger.warn(`Could not close PR #${attempt.pr_number} for bug=${bugId} [${res.status}]`);
+      } else {
+        this.logger.log(`Closed PR #${attempt.pr_number} for bug=${bugId} (bug resolved manually)`);
+      }
+
+      await this.prisma.bugFixAttempt.update({
+        where: { id: attempt.id },
+        data: { status: 'cancelled', failure_reason: 'Bug resolved manually before PR was merged' },
+      });
+    } catch (err) {
+      // Never let PR close failure affect the bug status update
+      this.logger.warn(`closeOpenAutofixPr failed for bug=${bugId}: ${(err as Error).message}`);
+    }
+  }
+
+  @Post(':bugId/dispatch')
+  async manualDispatch(
+    @Param('projectId') projectId: string,
+    @Param('bugId') bugId: string,
+    @CurrentUser('sub') userId: string,
+    @CurrentTenant() tenant: TenantContext,
+  ) {
+    const bug = await this.prisma.bug.findUnique({ where: { id: bugId, project_id: projectId } });
+    if (!bug) throw new NotFoundException('Bug not found');
+
+    const integrations = await this.prisma.projectIntegration.findMany({
+      where: { project_id: projectId, is_active: true },
+    });
+    if (integrations.length === 0) throw new BadRequestException('No active integrations configured for this project');
+
+    for (const integration of integrations) {
+      await this.dispatchQueue.add({ bugId, integrationId: integration.id, attempt: 1 });
+    }
+
+    await this.audit.log({
+      tenantId: tenant.tenantId,
+      actorId: userId,
+      action: 'bug_manual_dispatch',
+      entityType: 'bug',
+      entityId: bugId,
+      metadata: { projectId, integrationCount: integrations.length },
+    });
+
+    return { queued: integrations.length };
   }
 
   @Patch(':bugId/assign')
@@ -433,5 +509,112 @@ export class BugsController {
       (client) => client.tenantId === tenant.tenantId,
     );
     return bug;
+  }
+
+  // ── Fix Attempts ────────────────────────────────────────────────────────────
+
+  @Get(':bugId/fix-attempts')
+  async getFixAttempts(
+    @Param('projectId') projectId: string,
+    @Param('bugId') bugId: string,
+  ) {
+    const bug = await this.prisma.bug.findFirst({
+      where: { id: bugId, project_id: projectId },
+      select: { id: true },
+    });
+    if (!bug) throw new NotFoundException('Bug not found');
+
+    const attempts = await this.prisma.bugFixAttempt.findMany({
+      where: { bug_id: bugId },
+      orderBy: { attempt_number: 'asc' },
+    });
+    return { attempts };
+  }
+
+  @Post(':bugId/fix-attempts')
+  async triggerFixAttempt(
+    @Param('projectId') projectId: string,
+    @Param('bugId') bugId: string,
+    @Body() body: { requireApproval?: boolean },
+    @CurrentUser('sub') userId: string,
+    @CurrentTenant() tenant: TenantContext,
+  ) {
+    if (!(await this.authz.canManageProject(userId, projectId))) {
+      throw new ForbiddenException('You do not have permission to trigger fix attempts');
+    }
+
+    const bug = await this.prisma.bug.findFirst({
+      where: { id: bugId, project_id: projectId },
+      include: { error: { select: { id: true } } },
+    });
+    if (!bug) throw new NotFoundException('Bug not found');
+    if (bug.status === 'resolved' || bug.status === 'ignored') {
+      throw new BadRequestException(`Cannot fix a ${bug.status} bug`);
+    }
+
+    const repo = await this.prisma.projectRepository.findUnique({ where: { project_id: projectId } });
+    if (!repo) throw new BadRequestException('No repository connected to this project');
+
+    const active = await this.prisma.bugFixAttempt.count({
+      where: { bug_id: bugId, status: { notIn: ['failed', 'cancelled'] } },
+    });
+    if (active > 0) throw new BadRequestException('A fix attempt is already in progress');
+
+    await this.fixQueue.add({
+      bugId,
+      projectId,
+      errorId: bug.error.id,
+      requireApproval: body.requireApproval ?? true,
+    });
+
+    await this.prisma.bug.update({ where: { id: bugId }, data: { fix_status: 'fix_pending' } });
+
+    await this.audit.log({
+      tenantId: tenant.tenantId,
+      actorId: userId,
+      action: 'fix_attempt_triggered',
+      entityType: 'bug',
+      entityId: bugId,
+      metadata: { projectId, manual: true, requireApproval: body.requireApproval ?? true },
+    });
+
+    return { message: 'Fix generation queued', bugId };
+  }
+
+  @Patch(':bugId/fix-attempts/:attemptId/cancel')
+  async cancelFixAttempt(
+    @Param('projectId') projectId: string,
+    @Param('bugId') bugId: string,
+    @Param('attemptId') attemptId: string,
+    @CurrentUser('sub') userId: string,
+    @CurrentTenant() tenant: TenantContext,
+  ) {
+    if (!(await this.authz.canManageProject(userId, projectId))) {
+      throw new ForbiddenException('You do not have permission to cancel fix attempts');
+    }
+
+    const attempt = await this.prisma.bugFixAttempt.findFirst({
+      where: { id: attemptId, bug_id: bugId },
+    });
+    if (!attempt) throw new NotFoundException('Fix attempt not found');
+    if (['failed', 'cancelled', 'merged'].includes(attempt.status)) {
+      throw new BadRequestException(`Cannot cancel attempt in status: ${attempt.status}`);
+    }
+
+    const updated = await this.prisma.bugFixAttempt.update({
+      where: { id: attemptId },
+      data: { status: 'cancelled' },
+    });
+
+    await this.audit.log({
+      tenantId: tenant.tenantId,
+      actorId: userId,
+      action: 'fix_attempt_cancelled',
+      entityType: 'bug',
+      entityId: bugId,
+      metadata: { projectId, attemptId },
+    });
+
+    return updated;
   }
 }

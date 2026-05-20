@@ -124,13 +124,10 @@ html[data-theme="light"] {
 
 /* ── Base styles ─────────────────────────────────────────────────────────── */
 html {
-  color-scheme: dark;
+  color-scheme: var(--th-color-scheme);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
-}
-html[data-theme="light"] {
-  color-scheme: light;
 }
 
 body {
@@ -291,8 +288,8 @@ button:active:not(:disabled) { transform: scale(0.97); }
 .bg-th-surface   { background-color: var(--th-surface); }
 .bg-th-surface-2 { background-color: var(--th-surface-2); }
 .bg-th-surface-3 { background-color: var(--th-surface-3); }
-.bg-th-sidebar   { background-color: var(--th-sidebar-bg); }
-.bg-th-header    { background-color: var(--th-header-bg); }
+.bg-th-sidebar   { background-color: var(--th-sidebar-bg); transition: background-color 0.2s ease; }
+.bg-th-header    { background-color: var(--th-header-bg); transition: background-color 0.2s ease; }
 
 /* Hover backgrounds (for use as hover:bg-th-* in JSX with Tailwind arbitrary) */
 .hover\:bg-th-bg:hover        { background-color: var(--th-bg); }

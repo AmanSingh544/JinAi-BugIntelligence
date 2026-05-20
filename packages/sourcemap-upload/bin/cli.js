@@ -135,9 +135,9 @@ if (!PROJECT_ID) missing.push('--project-id / BUG_INTELLIGENCE_PROJECT_ID');
 if (!API_KEY)    missing.push('--api-key / BUG_INTELLIGENCE_API_KEY');
 
 if (missing.length) {
-  console.error(`❌ Missing required option(s):\n   ${missing.join('\n   ')}\n`);
-  console.error('Run with --help for usage information.');
-  process.exit(1);
+  console.warn(`⚠️  Skipping sourcemap upload — missing:\n   ${missing.join('\n   ')}\n`);
+  console.warn('Set these env vars to enable sourcemap uploads.');
+  process.exit(0);
 }
 
 /* ── File discovery ───────────────────────────────────────── */
@@ -333,6 +333,11 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error(err);
-  process.exit(1);
+  if (err.cause?.code === 'ECONNREFUSED' || err.code === 'ECONNREFUSED') {
+    console.warn(`⚠️  Skipping sourcemap upload — could not connect to ${API_URL}`);
+    console.warn('   Make sure BUG_INTELLIGENCE_API_URL points to your deployed backend.');
+    process.exit(0);
+  }
+  console.error('❌ Sourcemap upload failed:', err.message);
+  process.exit(0);
 });

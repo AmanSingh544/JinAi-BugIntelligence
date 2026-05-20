@@ -12,3 +12,4 @@
 /extension/public
 
 /packages/sourcemap-upload/node_modules
+/backend/uploads/sourcemaps/*

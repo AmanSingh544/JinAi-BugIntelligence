@@ -11,8 +11,12 @@ export class JiraProvider implements IntegrationProvider {
   readonly name = 'Jira';
   readonly schema = JIRA_SCHEMA;
 
+  private normalizeDomain(domain: string): string {
+    return domain.replace(/^https?:\/\//, '').replace(/\/$/, '');
+  }
+
   async validateCredentials(config: Record<string, JsonValue>): Promise<boolean> {
-    const domain = config.domain as string;
+    const domain = this.normalizeDomain(config.domain as string);
     const email = config.email as string;
     const apiToken = config.apiToken as string;
     if (!domain || !email || !apiToken) return false;
@@ -29,7 +33,7 @@ export class JiraProvider implements IntegrationProvider {
   }
 
   async createTicket(payload: BugReportPayload, config: Record<string, JsonValue>): Promise<TicketResult> {
-    const domain = config.domain as string;
+    const domain = this.normalizeDomain(config.domain as string);
     const email = config.email as string;
     const apiToken = config.apiToken as string;
     const projectKey = config.projectKey as string;
@@ -71,6 +75,7 @@ export class JiraProvider implements IntegrationProvider {
         issuetype: { name: 'Bug' },
         priority: { id: priorityMap[payload.severity] ?? '3' },
         labels: [`bug-intelligence`, `severity-${payload.severity}`],
+        assignee: null,
       },
     };
 

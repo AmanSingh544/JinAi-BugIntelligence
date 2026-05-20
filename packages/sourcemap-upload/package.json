@@ -1,6 +1,6 @@
 {
   "name": "@bug-intelligence/sourcemap-upload",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Upload Vite/Webpack build sourcemaps to Bug Intelligence Platform",
   "main": "bin/cli.js",
   "bin": {

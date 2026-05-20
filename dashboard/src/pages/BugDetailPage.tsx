@@ -5,8 +5,9 @@ import {
   ArrowLeft, Play, Users, CheckCircle2, EyeOff, Send,
   AlertTriangle, GitBranch, Clock, Cpu, ChevronRight,
   MessageSquare, Layers, Copy, Check, ExternalLink, Sparkles,
+  Wrench, GitPullRequest, XCircle, RefreshCw,
 } from 'lucide-react';
-import { api, type BugDetail, type SimilarBug, type ClusterMember, type ChatMessage } from '../api';
+import { api, type BugDetail, type SimilarBug, type ClusterMember, type ChatMessage, type FixAttempt } from '../api';
 import { useAuth } from '../hooks/useAuth';
 import SessionTimeline from '../components/SessionTimeline';
 import rrwebPlayer from 'rrweb-player';
@@ -166,6 +167,8 @@ export default function BugDetailPage() {
   const [chatLoading, setChatLoading] = useState(false);
   const [currentUser, setCurrentUser] = useState<{ id: string; email: string } | null>(null);
   const [copiedStack, setCopiedStack] = useState(false);
+  const [fixAttempts, setFixAttempts] = useState<FixAttempt[]>([]);
+  const [triggeringFix, setTriggeringFix] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const replayRef = useRef<HTMLDivElement>(null);
 
@@ -181,8 +184,46 @@ export default function BugDetailPage() {
       api.bugs.similar(projectId, bugId).then((r) => setSimilar(r.similar)).catch(() => setSimilar([])),
       api.bugs.clusterMembers(projectId, bugId).then((r) => setClusterMembers(r.members)).catch(() => setClusterMembers([])),
       api.bugs.chat.getThread(projectId, bugId).then((t) => setChatMessages(t.messages)).catch(() => setChatMessages([])),
+      api.bugs.fixAttempts.list(projectId, bugId).then((r) => setFixAttempts(r.attempts)).catch(() => setFixAttempts([])),
     ]);
   }, [projectId, bugId]);
+
+  // Poll fix attempts every 10s while any attempt is in an active (non-terminal) state
+  useEffect(() => {
+    if (!projectId || !bugId) return;
+    const ACTIVE = ['generating', 'validating', 'validated', 'pr_open'];
+    const hasActive = fixAttempts.some((a) => ACTIVE.includes(a.status));
+    if (!hasActive) return;
+
+    const id = setInterval(async () => {
+      try {
+        const r = await api.bugs.fixAttempts.list(projectId, bugId);
+        setFixAttempts(r.attempts);
+      } catch { /* ignore */ }
+    }, 10_000);
+
+    return () => clearInterval(id);
+  }, [projectId, bugId, fixAttempts]);
+
+  async function triggerFix() {
+    if (!projectId || !bugId) return;
+    setTriggeringFix(true);
+    try {
+      await api.bugs.fixAttempts.trigger(projectId, bugId, true);
+      const r = await api.bugs.fixAttempts.list(projectId, bugId);
+      setFixAttempts(r.attempts);
+    } catch (err) { setError((err as Error).message); }
+    finally { setTriggeringFix(false); }
+  }
+
+  async function cancelFix(attemptId: string) {
+    if (!projectId || !bugId) return;
+    try {
+      await api.bugs.fixAttempts.cancel(projectId, bugId, attemptId);
+      const r = await api.bugs.fixAttempts.list(projectId, bugId);
+      setFixAttempts(r.attempts);
+    } catch (err) { setError((err as Error).message); }
+  }
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -569,6 +610,92 @@ export default function BugDetailPage() {
                   ))}
                 </>
               )}
+            </div>
+          )}
+        </Card>
+      </FadeUp>
+
+      {/* ── Autofix ── */}
+      <FadeUp delay={0.53}>
+        <Card className="card-hover">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <div className="w-6 h-6 rounded-md bg-emerald-500/15 border border-emerald-500/20 flex items-center justify-center">
+                <Wrench size={12} className="text-emerald-400" />
+              </div>
+              <CardTitle>Autofix</CardTitle>
+              {bug.fixStatus && (
+                <span className={cn(
+                  'text-[10px] font-mono px-1.5 py-0.5 rounded-full border',
+                  bug.fixStatus === 'merged' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+                  bug.fixStatus === 'pr_open' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' :
+                  bug.fixStatus === 'fix_failed' ? 'bg-red-500/10 text-red-400 border-red-500/20' :
+                  'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                )}>
+                  {bug.fixStatus.replace(/_/g, ' ')}
+                </span>
+              )}
+            </div>
+            {projectId && canManage(projectId) && bug.status !== 'resolved' && bug.status !== 'ignored' && (
+              <Button size="sm" variant="secondary" onClick={() => void triggerFix()} loading={triggeringFix}>
+                <RefreshCw size={11} /> Trigger Fix
+              </Button>
+            )}
+          </div>
+
+          {fixAttempts.length === 0 ? (
+            <p className="text-xs text-th-3">No fix attempts yet. Autofix runs automatically when a matching rule fires, or trigger manually above.</p>
+          ) : (
+            <div className="space-y-2">
+              {fixAttempts.map((a) => (
+                <div key={a.id} className="border border-th-sub rounded-lg p-3 bg-th-bg/40">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-mono text-th-3">#{a.attempt_number}</span>
+                      <span className={cn(
+                        'text-[10px] font-mono px-1.5 py-0.5 rounded border',
+                        a.status === 'merged' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+                        a.status === 'pr_open' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' :
+                        a.status === 'failed' ? 'bg-red-500/10 text-red-400 border-red-500/20' :
+                        a.status === 'cancelled' ? 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20' :
+                        'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                      )}>
+                        {a.status}
+                      </span>
+                      {a.fix_confidence != null && (
+                        <span className="text-[10px] text-th-3 font-mono">{Math.round(a.fix_confidence * 100)}% conf.</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {a.pr_url && (
+                        <a href={a.pr_url} target="_blank" rel="noreferrer"
+                          className="flex items-center gap-1 text-[10px] text-blue-400 hover:text-blue-300 transition-colors">
+                          <GitPullRequest size={10} /> PR #{a.pr_number}
+                        </a>
+                      )}
+                      {['generating', 'validating', 'validated', 'pr_open'].includes(a.status) && projectId && canManage(projectId) && (
+                        <button
+                          onClick={() => void cancelFix(a.id)}
+                          className="flex items-center gap-1 text-[10px] text-th-3 hover:text-red-400 transition-colors"
+                        >
+                          <XCircle size={10} /> Cancel
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  {a.target_file && (
+                    <div className="text-[10px] font-mono text-th-3 truncate">
+                      {a.target_file}{a.start_line != null ? `:${a.start_line}–${a.end_line}` : ''}
+                    </div>
+                  )}
+                  {a.fix_explanation && (
+                    <p className="text-[11px] text-th-2 mt-1">{a.fix_explanation}</p>
+                  )}
+                  {a.failure_reason && (
+                    <p className="text-[10px] text-red-400 mt-1 font-mono">{a.failure_reason}</p>
+                  )}
+                </div>
+              ))}
             </div>
           )}
         </Card>

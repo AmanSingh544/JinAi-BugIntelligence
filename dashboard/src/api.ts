@@ -149,6 +149,19 @@ export const api = {
           body: JSON.stringify({ message }),
         }),
     },
+    fixAttempts: {
+      list: (projectId: string, bugId: string) =>
+        request<{ attempts: FixAttempt[] }>(`/projects/${projectId}/bugs/${bugId}/fix-attempts`),
+      trigger: (projectId: string, bugId: string, requireApproval = true) =>
+        request<{ message: string; bugId: string }>(`/projects/${projectId}/bugs/${bugId}/fix-attempts`, {
+          method: 'POST',
+          body: JSON.stringify({ requireApproval }),
+        }),
+      cancel: (projectId: string, bugId: string, attemptId: string) =>
+        request<FixAttempt>(`/projects/${projectId}/bugs/${bugId}/fix-attempts/${attemptId}/cancel`, {
+          method: 'PATCH',
+        }),
+    },
   },
 
   environments: {
@@ -210,6 +223,25 @@ export const api = {
     markAllAsRead: () => request<void>('/notifications/read-all', { method: 'PATCH' }),
     delete: (id: string) => request<void>(`/notifications/${id}`, { method: 'DELETE' }),
   },
+
+  repository: {
+    get: (projectId: string) =>
+      request<ProjectRepository>(`/projects/${projectId}/repository`),
+    connect: (projectId: string, dto: ConnectRepositoryDto) =>
+      request<ProjectRepository>(`/projects/${projectId}/repository`, {
+        method: 'POST',
+        body: JSON.stringify(dto),
+      }),
+    update: (projectId: string, dto: Partial<ConnectRepositoryDto>) =>
+      request<ProjectRepository>(`/projects/${projectId}/repository`, {
+        method: 'PATCH',
+        body: JSON.stringify(dto),
+      }),
+    disconnect: (projectId: string) =>
+      request<{ message: string }>(`/projects/${projectId}/repository`, { method: 'DELETE' }),
+    validate: (projectId: string) =>
+      request<{ valid: boolean; message: string }>(`/projects/${projectId}/repository/validate`),
+  },
 };
 
 export interface Project {
@@ -264,6 +296,7 @@ export interface BugDetail extends Bug {
   regressionRelease?: { id: string; version: string };
   release?: { id: string; version: string };
   archivedAt?: string;
+  fixStatus?: string | null;
   error: {
     message: string;
     stack?: string;
@@ -430,8 +463,62 @@ interface RawBugDetail extends RawBug {
   steps_to_reproduce: string[];
   fix_suggestion: string;
   ai_model_version: string;
+  fix_status?: string | null;
   error: { message: string; stack?: string };
   cluster?: { id: string; occurrenceCount: number };
+}
+
+export interface ProjectRepository {
+  id: string;
+  project_id: string;
+  github_owner: string;
+  github_repo: string;
+  default_branch: string;
+  source_root_prefix: string;
+  path_overrides: Record<string, string>;
+  installation_id: number;
+  merge_strategy: string;
+  auto_merge_enabled: boolean;
+  min_severity: string;
+  fix_confidence_min: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ConnectRepositoryDto {
+  github_owner: string;
+  github_repo: string;
+  default_branch?: string;
+  source_root_prefix?: string;
+  path_overrides?: Record<string, string>;
+  installation_id: number;
+  merge_strategy?: string;
+  auto_merge_enabled?: boolean;
+  min_severity?: string;
+  fix_confidence_min?: number;
+}
+
+export interface FixAttempt {
+  id: string;
+  bug_id: string;
+  repository_id: string;
+  attempt_number: number;
+  status: 'generating' | 'validating' | 'validated' | 'pr_open' | 'merged' | 'failed' | 'cancelled';
+  target_file: string | null;
+  start_line: number | null;
+  end_line: number | null;
+  original_code: string | null;
+  fixed_code: string | null;
+  fix_explanation: string | null;
+  fix_confidence: number | null;
+  branch_name: string | null;
+  pr_number: number | null;
+  pr_url: string | null;
+  pr_merged_at: string | null;
+  validation_passed: boolean | null;
+  failure_reason: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 function mapBug(r: RawBug): Bug {
@@ -454,6 +541,7 @@ function mapBugDetail(r: RawBugDetail): BugDetail {
     stepsToReproduce: r.steps_to_reproduce ?? [],
     fixSuggestion: r.fix_suggestion,
     aiModelVersion: r.ai_model_version,
+    fixStatus: r.fix_status,
     error: r.error,
     cluster: r.cluster,
   };

@@ -1,6 +1,6 @@
 import type { ClickEvent, NavigationEvent, InputEvent } from '../shared/types';
 import { generateId, getSessionId, sendEvent, buildSelector } from './shared';
-import { startReplayRecording } from './replay-tracker';
+import { startReplayRecording, setReplayEnabled, flushReplayBuffer } from './replay-tracker';
 
 // ── Click tracking ────────────────────────────────────────────────────────────
 
@@ -114,5 +114,20 @@ history.replaceState = (...args) => { originalReplaceState(...args); onNavigate(
 
 window.addEventListener('popstate', onNavigate);
 
-// Start replay recording if enabled
+// Start replay recording if enabled. Called immediately (config may already be
+// cached in-process from a previous push) and again when the SW broadcasts config.
 startReplayRecording();
+
+// Flush replay when error-tracker signals an error (cross-IIFE via CustomEvent)
+window.addEventListener('__bi_error__', () => flushReplayBuffer(true));
+
+window.addEventListener('message', (event) => {
+  if (event.source !== window) return;
+  if (event.data?.__source !== '__bug_intel_sw__') return;
+  if (event.data?.type === 'RUNTIME_CONFIG') {
+    const enabled = event.data.replayEnabled === true;
+    console.log('[BugIntel] RUNTIME_CONFIG received, replayEnabled=', enabled);
+    setReplayEnabled(enabled);
+    startReplayRecording();
+  }
+});

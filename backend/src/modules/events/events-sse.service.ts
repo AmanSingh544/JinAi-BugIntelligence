@@ -14,6 +14,7 @@ export type SseEvent =
   | { event: 'bug:assigned'; data: { bugId: string; projectId: string; assignedTo: string } }
   | { event: 'bug:unarchived'; data: { bugId: string; projectId: string } }
   | { event: 'notification:new'; data: { userId: string; notificationId: string } }
+  | { event: 'bug:fix_pr_opened'; data: { bugId: string; projectId: string; prUrl: string; prNumber: number } }
   | { event: 'ping'; data: { ts: number } };
 
 @Injectable()

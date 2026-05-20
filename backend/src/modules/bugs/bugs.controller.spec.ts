@@ -6,6 +6,8 @@ import { AuthorizationService } from '../auth/authorization.service';
 import { AuditService } from '../audit/audit.service';
 import { EventsSseService } from '../events/events-sse.service';
 import { ArchiveQueue } from './archive.queue';
+import { FixGenerationQueue } from '../autofix/fix-generation.queue';
+import { GitHubAppService } from '../autofix/github-app.service';
 import { JwtAuthGuard } from '../../shared/guards/jwt-auth.guard';
 import { TenantAuthGuard } from '../auth/tenant-auth.guard';
 
@@ -16,6 +18,10 @@ const mockPrisma = () => ({
     findFirstOrThrow: jest.fn(),
     count: jest.fn(),
     update: jest.fn(),
+  },
+  bugFixAttempt: {
+    findFirst: jest.fn().mockResolvedValue(null),
+    update: jest.fn().mockResolvedValue({}),
   },
   userNotification: {
     create: jest.fn(),
@@ -45,6 +51,14 @@ const mockArchiveQueue = () => ({
   add: jest.fn().mockResolvedValue({ id: 'job-1' }),
 });
 
+const mockFixGenerationQueue = () => ({
+  add: jest.fn().mockResolvedValue({ id: 'job-2' }),
+});
+
+const mockGitHubAppService = () => ({
+  apiRequest: jest.fn().mockResolvedValue({ ok: true, status: 200, text: async () => '' }),
+});
+
 describe('BugsController', () => {
   let controller: BugsController;
   let prisma: ReturnType<typeof mockPrisma>;
@@ -52,6 +66,7 @@ describe('BugsController', () => {
   let audit: ReturnType<typeof mockAudit>;
   let sse: ReturnType<typeof mockSse>;
   let archiveQueue: ReturnType<typeof mockArchiveQueue>;
+  let githubApp: ReturnType<typeof mockGitHubAppService>;
 
   beforeEach(async () => {
     const module = await Test.createTestingModule({
@@ -62,6 +77,8 @@ describe('BugsController', () => {
         { provide: AuditService, useFactory: mockAudit },
         { provide: EventsSseService, useFactory: mockSse },
         { provide: ArchiveQueue, useFactory: mockArchiveQueue },
+        { provide: FixGenerationQueue, useFactory: mockFixGenerationQueue },
+        { provide: GitHubAppService, useFactory: mockGitHubAppService },
       ],
     })
       .overrideGuard(JwtAuthGuard).useValue({ canActivate: () => true })
@@ -74,6 +91,7 @@ describe('BugsController', () => {
     audit = module.get(AuditService);
     sse = module.get(EventsSseService);
     archiveQueue = module.get(ArchiveQueue);
+    githubApp = module.get(GitHubAppService);
   });
 
   describe('findAll', () => {
@@ -192,6 +210,53 @@ describe('BugsController', () => {
 
       await expect(controller.updateStatus('p1', 'b1', { status: 'resolved' }, 'u1', { tenantId: 't1' } as any))
         .rejects.toThrow(ForbiddenException);
+    });
+
+    it('closes open autofix PR when bug is resolved and PR exists', async () => {
+      authz.canResolveBug.mockResolvedValue(true);
+      prisma.bug.update.mockResolvedValue({ id: 'b1', status: 'resolved' });
+      prisma.bugFixAttempt.findFirst.mockResolvedValue({
+        id: 'attempt-1',
+        pr_number: 42,
+        bug_id: 'b1',
+        repository: { installation_id: 1234, github_owner: 'acme', github_repo: 'app' },
+      });
+      prisma.bugFixAttempt.update.mockResolvedValue({});
+
+      await controller.updateStatus('p1', 'b1', { status: 'resolved' }, 'u1', { tenantId: 't1' } as any);
+
+      // Allow the void async to settle
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(githubApp.apiRequest).toHaveBeenCalledWith(
+        1234,
+        '/repos/acme/app/pulls/42',
+        expect.objectContaining({ method: 'PATCH' }),
+      );
+      expect(prisma.bugFixAttempt.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: 'cancelled' }) }),
+      );
+    });
+
+    it('does not call GitHub API when no open autofix PR exists', async () => {
+      authz.canResolveBug.mockResolvedValue(true);
+      prisma.bug.update.mockResolvedValue({ id: 'b1', status: 'resolved' });
+      prisma.bugFixAttempt.findFirst.mockResolvedValue(null);
+
+      await controller.updateStatus('p1', 'b1', { status: 'resolved' }, 'u1', { tenantId: 't1' } as any);
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(githubApp.apiRequest).not.toHaveBeenCalled();
+    });
+
+    it('does not close PR when status is open (not resolved/archived)', async () => {
+      authz.canResolveBug.mockResolvedValue(true);
+      prisma.bug.update.mockResolvedValue({ id: 'b1', status: 'open' });
+
+      await controller.updateStatus('p1', 'b1', { status: 'open' }, 'u1', { tenantId: 't1' } as any);
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(prisma.bugFixAttempt.findFirst).not.toHaveBeenCalled();
     });
   });
 

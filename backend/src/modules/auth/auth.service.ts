@@ -248,7 +248,7 @@ export class AuthService {
   }
 
   sign(userId: string, email: string) {
-    const expiresIn = this.config.get<string>('JWT_EXPIRATION', '15m');
+    const expiresIn = this.config.get<string>('JWT_EXPIRATION', '15m') as any;
     return this.jwt.sign(
       { sub: userId, email, jti: randomUUID() },
       { secret: this.config.get<string>('JWT_SECRET', 'fallback-secret'), expiresIn },

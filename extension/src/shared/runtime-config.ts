@@ -91,25 +91,27 @@ export async function syncRuntimeConfig(
   ingestUrl: string,
   envName?: string,
 ): Promise<void> {
+  console.log('[BugIntel] syncRuntimeConfig fetching from', ingestUrl.replace('/ingest/batch', '/sdk/config'));
   const fresh = await fetchRuntimeConfig(apiKey, ingestUrl, envName);
+  console.log('[BugIntel] syncRuntimeConfig result:', fresh ? `replayEnabled=${fresh.replayEnabled}` : 'null (fetch failed)');
   if (!fresh) return;
 
-  const current = await loadRuntimeConfig();
-  if (fresh.version > current.version) {
-    await saveRuntimeConfig(fresh);
-  }
+  await saveRuntimeConfig(fresh);
 }
 
 export function startConfigPolling(
   apiKey: string,
   ingestUrl: string,
   envName?: string,
+  onUpdate?: () => void,
 ): void {
   if (_pollTimer) return;
-  void syncRuntimeConfig(apiKey, ingestUrl, envName);
-  _pollTimer = setInterval(() => {
-    void syncRuntimeConfig(apiKey, ingestUrl, envName);
-  }, POLL_INTERVAL_MS);
+  const sync = async () => {
+    await syncRuntimeConfig(apiKey, ingestUrl, envName);
+    onUpdate?.();
+  };
+  void sync();
+  _pollTimer = setInterval(() => void sync(), POLL_INTERVAL_MS);
 }
 
 export function stopConfigPolling(): void {

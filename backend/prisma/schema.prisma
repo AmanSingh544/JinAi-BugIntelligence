@@ -101,6 +101,7 @@ model Project {
   notification_channels NotificationChannel[]
   notifications UserNotification[]
   chat_threads  ChatThread[]
+  repository    ProjectRepository?
 }
 
 model Session {
@@ -227,6 +228,7 @@ model Bug {
   assigned_to         String?   @db.Uuid
   regression_release_id String? @db.Uuid
   archived_at         DateTime? @db.Timestamptz
+  fix_status          String?
   created_at          DateTime @default(now()) @db.Timestamptz
 
   project Project @relation(fields: [project_id], references: [id], onDelete: Cascade)
@@ -242,6 +244,7 @@ model Bug {
   notification_logs NotificationLog[]
   notifications    UserNotification[]
   chat_thread      ChatThread?
+  fix_attempts     BugFixAttempt[]
 
   @@index([project_id, status, created_at(sort: Desc)])
   @@index([project_id, archived_at, created_at(sort: Desc)])
@@ -465,4 +468,64 @@ model UserNotification {
 
   @@index([user_id, read_at])
   @@index([user_id, created_at(sort: Desc)])
+}
+
+// ─── Autofix: GitHub repository connection per project ──────────────────────
+
+model ProjectRepository {
+  id                   String   @id @default(uuid()) @db.Uuid
+  project_id           String   @unique @db.Uuid
+  github_owner         String
+  github_repo          String
+  default_branch       String   @default("main")
+  source_root_prefix   String   @default("")
+  path_overrides       Json     @default("{}")
+  installation_id      Int
+  webhook_secret       String
+  merge_strategy       String   @default("squash")
+  auto_merge_enabled   Boolean  @default(false)
+  min_severity         String   @default("high")
+  fix_confidence_min   Float    @default(0.75)
+  created_at           DateTime @default(now()) @db.Timestamptz
+  updated_at           DateTime @updatedAt @db.Timestamptz
+
+  project      Project         @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  fix_attempts BugFixAttempt[]
+}
+
+// ─── Autofix: individual fix attempt tracking ───────────────────────────────
+
+model BugFixAttempt {
+  id             String    @id @default(uuid()) @db.Uuid
+  bug_id         String    @db.Uuid
+  repository_id  String    @db.Uuid
+  attempt_number Int
+  status         String    @default("generating")
+
+  target_file      String?   @db.Text
+  start_line       Int?
+  end_line         Int?
+  original_code    String?   @db.Text
+  fixed_code       String?   @db.Text
+  fix_explanation  String?   @db.Text
+  fix_confidence   Float?
+
+  branch_name   String?
+  pr_number     Int?
+  pr_url        String?
+  pr_merged_at  DateTime? @db.Timestamptz
+
+  validation_passed Boolean?
+  validation_output String?  @db.Text
+
+  failure_reason String?
+  created_at     DateTime  @default(now()) @db.Timestamptz
+  updated_at     DateTime  @updatedAt @db.Timestamptz
+
+  bug        Bug               @relation(fields: [bug_id], references: [id], onDelete: Cascade)
+  repository ProjectRepository @relation(fields: [repository_id], references: [id], onDelete: Cascade)
+
+  @@unique([bug_id, attempt_number])
+  @@index([bug_id, status])
+  @@index([status, pr_number])
 }

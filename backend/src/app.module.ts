@@ -25,6 +25,9 @@ import { UserNotificationsModule } from './modules/user-notifications/user-notif
 import { MetricsModule } from './modules/metrics/metrics.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { HttpMetricsMiddleware } from './shared/metrics/http-metrics.middleware';
+import { AutofixModule } from './modules/autofix/autofix.module';
+import { ProjectRepositoriesModule } from './modules/project-repositories/project-repositories.module';
+import { WebhooksModule } from './modules/webhooks/webhooks.module';
 
 @Module({
   imports: [
@@ -54,6 +57,9 @@ import { HttpMetricsMiddleware } from './shared/metrics/http-metrics.middleware'
     MetricsModule,
     AuditModule,
     EventsModule,
+    AutofixModule,
+    ProjectRepositoriesModule,
+    WebhooksModule,
   ],
   providers: [],
   exports: [],

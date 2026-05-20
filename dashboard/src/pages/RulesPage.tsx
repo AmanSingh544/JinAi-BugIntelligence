@@ -27,12 +27,14 @@ const FIELDS = [
   { value: 'session.unique_users', label: 'Unique Users' },
 ];
 const OPS = ['=', '>=', '<=', '>'];
-const ACTIONS = ['auto_dispatch', 'notify', 'ignore'];
+const ACTIONS = ['auto_dispatch', 'notify', 'ignore', 'auto_fix', 'auto_fix_require_approval'];
 
 const ACTION_LABELS: Record<string, string> = {
   auto_dispatch: 'Auto-dispatch',
   notify: 'Notify',
   ignore: 'Ignore',
+  auto_fix: 'Auto-fix (no approval)',
+  auto_fix_require_approval: 'Auto-fix (require approval)',
 };
 
 export default function RulesPage() {

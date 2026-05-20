@@ -95,23 +95,8 @@ export class AiAnalysisWorker implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    // 1. Acquire embedding — prefer pre-computed from async embedding queue, fall back to inline
-    let embedding: number[] = [];
-    const vectorRows = await this.prisma.$queryRaw<{ vector: number[] }[]>`
-      SELECT vector FROM "Error" WHERE id = ${errorId}::uuid LIMIT 1
-    `;
-    const precomputed = vectorRows[0]?.vector;
-    if (precomputed && precomputed.length > 0) {
-      embedding = precomputed;
-      this.logger.debug(`Using pre-computed embedding for error=${errorId}`);
-    } else {
-      const embeddingText = `${error.message} ${error.stack_unminified ?? error.stack ?? ''}`;
-      this.logger.warn(`No pre-computed embedding for error=${errorId} — falling back to inline generation`);
-      embedding = await this.generateEmbedding(embeddingText);
-    }
-
-    // 2. Find or create cluster using embedding
-    const clusterId = await this.findOrCreateCluster(projectId, errorId, embedding);
+    // 1. Find or create cluster by fingerprint
+    const clusterId = await this.findOrCreateCluster(projectId, errorId, fingerprint);
     if (!clusterId) {
       this.logger.warn(`Could not determine cluster for error=${errorId}`);
       await this.createFailedBug(projectId, sessionId, errorId);
@@ -214,17 +199,10 @@ export class AiAnalysisWorker implements OnModuleInit, OnModuleDestroy {
         data: { bug_id: bug.id },
       });
 
-      if (embedding.length > 0) {
-        await this.prisma.$executeRaw`
-          UPDATE "Error" SET vector = ${JSON.stringify(embedding)}::vector, cluster_id = ${clusterId}::uuid
-          WHERE id = ${errorId}::uuid
-        `;
-      } else {
-        await this.prisma.error.update({
-          where: { id: errorId },
-          data: { cluster_id: clusterId },
-        });
-      }
+      await this.prisma.error.update({
+        where: { id: errorId },
+        data: { cluster_id: clusterId },
+      });
 
       this.logger.log(`Bug created id=${bug.id} cluster=${clusterId} severity=${result.severity} model=${modelVersion}`);
 
@@ -332,51 +310,25 @@ export class AiAnalysisWorker implements OnModuleInit, OnModuleDestroy {
   private async findOrCreateCluster(
     projectId: string,
     errorId: string,
-    embedding: number[],
+    fingerprint: string,
   ): Promise<string | null> {
-    if (embedding.length === 0) {
-      // No embedding — create a placeholder cluster so the error still gets processed
-      const result = await this.prisma.$queryRaw<{ id: string }[]>`
-        INSERT INTO "ErrorCluster" (id, project_id, occurrence_count, last_seen_at, created_at)
-        VALUES (gen_random_uuid(), ${projectId}::uuid, 1, NOW(), NOW())
-        RETURNING id
-      `;
-      return result[0]?.id ?? null;
-    }
+    // Find an existing cluster via any error with the same fingerprint in this project
+    const existing = await this.prisma.error.findFirst({
+      where: { project_id: projectId, fingerprint, cluster_id: { not: null }, id: { not: errorId } },
+      select: { cluster_id: true },
+    });
 
-    const project = await this.prisma.project.findUnique({ where: { id: projectId } });
-    if (!project) return null;
-
-    const threshold = project.clustering_threshold;
-    const vectorLiteral = JSON.stringify(embedding);
-
-    const nearest = await this.prisma.$queryRaw<{ id: string; distance: number }[]>`
-      SELECT id, (centroid <=> ${vectorLiteral}::vector) AS distance
-      FROM "ErrorCluster"
-      WHERE project_id = ${projectId}::uuid
-      ORDER BY centroid <=> ${vectorLiteral}::vector
-      LIMIT 1
-    `;
-
-    if (nearest.length > 0 && nearest[0] !== undefined && nearest[0].distance <= threshold) {
-      const clusterId = nearest[0].id;
-      await this.prisma.$executeRaw`
-        UPDATE "ErrorCluster"
-        SET
-          centroid = (
-            SELECT ((occurrence_count * centroid) + ${vectorLiteral}::vector) / (occurrence_count + 1)
-            FROM "ErrorCluster" WHERE id = ${clusterId}::uuid
-          ),
-          occurrence_count = occurrence_count + 1,
-          last_seen_at = NOW()
-        WHERE id = ${clusterId}::uuid
-      `;
-      return clusterId;
+    if (existing?.cluster_id) {
+      await this.prisma.errorCluster.update({
+        where: { id: existing.cluster_id },
+        data: { occurrence_count: { increment: 1 }, last_seen_at: new Date() },
+      });
+      return existing.cluster_id;
     }
 
     const result = await this.prisma.$queryRaw<{ id: string }[]>`
-      INSERT INTO "ErrorCluster" (id, project_id, centroid, occurrence_count, last_seen_at, created_at)
-      VALUES (gen_random_uuid(), ${projectId}::uuid, ${vectorLiteral}::vector, 1, NOW(), NOW())
+      INSERT INTO "ErrorCluster" (id, project_id, occurrence_count, last_seen_at, created_at)
+      VALUES (gen_random_uuid(), ${projectId}::uuid, 1, NOW(), NOW())
       RETURNING id
     `;
     return result[0]?.id ?? null;
@@ -450,20 +402,6 @@ export class AiAnalysisWorker implements OnModuleInit, OnModuleDestroy {
       severity,
       confidence: typeof parsed.confidence === 'number' ? parsed.confidence : undefined,
     };
-  }
-
-  private async generateEmbedding(text: string): Promise<number[]> {
-    const embeddingModel = this.config.get<string>('AI_EMBEDDING_MODEL');
-    if (!embeddingModel) return [];
-    try {
-      const response = await this.ai.embeddings.create({
-        model: embeddingModel,
-        input: text.slice(0, 2048),
-      });
-      return response.data[0]?.embedding ?? [];
-    } catch {
-      return [];
-    }
   }
 
   private async createFailedBug(projectId: string, sessionId: string, errorId: string) {

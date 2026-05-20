@@ -1,6 +1,5 @@
 import { record } from 'rrweb';
-import { getRuntimeConfig } from '../shared/runtime-config';
-import { sendEvent } from './shared';
+import { sendEvent, getSessionId } from './shared';
 
 const MAX_BUFFER_SIZE = 200;
 const POST_ERROR_RECORD_MS = 5000;
@@ -8,10 +7,16 @@ const POST_ERROR_RECORD_MS = 5000;
 let buffer: unknown[] = [];
 let recording = false;
 let stopFn: (() => void) | null = null;
+let _replayEnabled = false;
+
+export function setReplayEnabled(enabled: boolean) {
+  _replayEnabled = enabled;
+}
 
 export function startReplayRecording() {
+  console.log('[BugIntel] startReplayRecording called, recording=', recording, 'enabled=', _replayEnabled);
   if (recording) return;
-  if (!getRuntimeConfig().replayEnabled) return;
+  if (!_replayEnabled) return;
 
   recording = true;
   buffer = [];
@@ -37,7 +42,7 @@ export function stopReplayRecording() {
 }
 
 export function flushReplayBuffer(includeExtra = false) {
-  if (!getRuntimeConfig().replayEnabled) return;
+  if (!_replayEnabled) return;
 
   const events = [...buffer];
   buffer = [];
@@ -65,7 +70,7 @@ export function flushReplayBuffer(includeExtra = false) {
 function sendReplayEvents(events: unknown[]) {
   sendEvent({
     id: crypto.randomUUID(),
-    sessionId: '',
+    sessionId: getSessionId(),
     timestamp: Date.now(),
     type: 'replay_snapshot',
     url: window.location.href,

@@ -6,7 +6,7 @@ export const JIRA_SCHEMA: ProviderSchema = {
   type: 'managed',
   schemaVersion: 1,
   fields: [
-    { name: 'domain', type: 'text', label: 'Domain', required: true, hint: 'e.g. myteam.atlassian.net' },
+    { name: 'domain', type: 'text', label: 'Domain', required: true, hint: 'e.g. myteam.atlassian.net (no https://)' },
     { name: 'email', type: 'text', label: 'Email', required: true, hint: 'Your Atlassian account email' },
     { name: 'apiToken', type: 'password', label: 'API Token', required: true, hint: 'From id.atlassian.com/manage-profile/security/api-tokens' },
     { name: 'projectKey', type: 'text', label: 'Project Key', required: true, hint: 'e.g. PROJ, BUG' },
@@ -31,9 +31,11 @@ export const MERIDIAN_SCHEMA: ProviderSchema = {
   type: 'managed',
   schemaVersion: 1,
   fields: [
-    { name: 'baseUrl', type: 'text', label: 'Base URL', required: true, hint: 'e.g. https://meridian.example.com' },
-    { name: 'apiKey', type: 'password', label: 'API Key', required: true },
-    { name: 'projectKey', type: 'text', label: 'Project Key', required: false },
+    { name: 'baseUrl', type: 'text', label: 'Base URL', required: true, hint: 'e.g. https://meridian-be-production.up.railway.app' },
+    { name: 'accessToken', type: 'password', label: 'Access Token', required: true, hint: 'Your customer_access_token cookie value. Log into Meridian customer portal → DevTools → Application → Cookies → copy customer_access_token value.' },
+    { name: 'tenantId', type: 'text', label: 'Tenant ID', required: true, hint: 'UUID of your Meridian tenant' },
+    { name: 'projectId', type: 'text', label: 'Project ID', required: false, hint: 'Optional — UUID of a specific Meridian project' },
+    { name: 'environment', type: 'select', label: 'Environment', required: false, options: ['PROD', 'STAGING', 'DEV'] },
   ],
 };
 
