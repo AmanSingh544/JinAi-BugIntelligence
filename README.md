@@ -1,4 +1,4 @@
-# Bug Intelligence Platform
+# JinAi — Bug Intelligence Platform
 
 An AI-powered browser observability and bug intelligence platform. Install the Chrome extension on any website you're testing — errors are automatically captured, deduplicated, analyzed by AI, clustered, and dispatched to your issue tracker.
 
@@ -7,18 +7,20 @@ An AI-powered browser observability and bug intelligence platform. Install the C
 ## How It Works
 
 ```
-Browser (extension)
-  └─ captures errors, clicks, network calls, console logs
+Browser (Chrome Extension)
+  └─ captures errors, unhandled rejections, network calls, console logs,
+     DOM clicks, SPA navigation, session replay (rrweb), screenshots
       └─ POST /api/v1/ingest/batch  (X-API-Key auth)
           └─ [ingest queue]  →  IngestWorker
               └─ saves events + session to DB
               └─ [error-detection queue]  →  ErrorDetectionWorker
                   └─ fingerprints + deduplicates (DB-level unique constraint)
+                  └─ unminifies stack traces via uploaded sourcemaps
                   └─ [ai-analysis queue]  →  AiAnalysisWorker
                       └─ checks Redis cache by fingerprint
                       └─ fetches last 20 session events from DB
                       └─ calls Claude Haiku → structured Bug record
-                      └─ generates embedding
+                      └─ [embedding queue]  →  generates vector embedding
                       └─ [clustering queue]  →  ClusteringWorker
                           └─ pgvector KNN → assigns/creates ErrorCluster
                       └─ [rule-evaluation queue]  →  RuleEvaluationWorker
@@ -27,6 +29,8 @@ Browser (extension)
                               └─ calls IntegrationProvider (Meridian / Jira / GitHub)
                               └─ retries with backoff [0s, 30s, 5m, 30m, 2h]
                               └─ dead after 5 attempts → DLQ
+                          └─ on match → [notification queue]  →  NotificationWorker
+                              └─ sends Slack / Email / Teams alerts
 ```
 
 ---
@@ -35,56 +39,98 @@ Browser (extension)
 
 ```
 Extension--/
-├── backend/                  NestJS API + all workers
+├── backend/                        NestJS API + all workers
 │   ├── prisma/
-│   │   └── schema.prisma     Full DB schema (all tables)
+│   │   └── schema.prisma           Full DB schema (all tables)
 │   ├── src/
 │   │   ├── modules/
-│   │   │   ├── auth/         JWT login/register + API key generation
-│   │   │   ├── projects/     Project CRUD + API key rotation
-│   │   │   ├── ingest/       POST /ingest/batch → BullMQ → IngestWorker
-│   │   │   ├── errors/       ErrorDetectionWorker (fingerprint + dedup)
-│   │   │   ├── ai-analysis/  AiAnalysisWorker + PromptService
-│   │   │   ├── clustering/   ClusteringWorker (pgvector KNN)
-│   │   │   ├── rules/        RuleEvaluationWorker + rule-evaluator
-│   │   │   ├── integrations/ DispatchWorker + provider registry
+│   │   │   ├── auth/               JWT login/register/verify-email + Google/GitHub OAuth
+│   │   │   ├── tenants/            Multi-tenant support
+│   │   │   ├── projects/           Project CRUD + API key rotation
+│   │   │   ├── environments/       Environment management (dev/staging/prod)
+│   │   │   ├── ingest/             POST /ingest/batch → BullMQ → IngestWorker
+│   │   │   ├── errors/             ErrorDetectionWorker + stack unminifier
+│   │   │   ├── ai-analysis/        AiAnalysisWorker + PromptService + embedding queue
+│   │   │   ├── clustering/         ClusteringWorker (pgvector KNN)
+│   │   │   ├── rules/              RuleEvaluationWorker + rule-evaluator
+│   │   │   ├── integrations/       DispatchWorker + provider registry
 │   │   │   │   └── providers/
-│   │   │   │       ├── integration.interface.ts   IntegrationProvider interface
-│   │   │   │       ├── integration.registry.ts    Provider registry
-│   │   │   │       ├── meridian-3sc.provider.ts   ✅ Real implementation
-│   │   │   │       ├── jira.provider.ts            🔲 Phase 2 stub
-│   │   │   │       └── github.provider.ts          🔲 Phase 2 stub
-│   │   │   ├── sessions/     GET /projects/:id/sessions
-│   │   │   └── bugs/         GET/PATCH /projects/:id/bugs
+│   │   │   │       ├── integration.interface.ts    IntegrationProvider interface
+│   │   │   │       ├── integration.registry.ts     Provider registry
+│   │   │   │       ├── generic-http.provider.ts    ✅ Generic webhook provider
+│   │   │   │       ├── github.provider.ts          ✅ GitHub Issues
+│   │   │   │       └── meridian-3sc.provider.ts    ✅ Meridian 3SC
+│   │   │   ├── notifications/      Slack / Email / Teams alert workers
+│   │   │   │   └── providers/
+│   │   │   │       ├── slack.provider.ts
+│   │   │   │       ├── email.provider.ts
+│   │   │   │       └── teams.provider.ts
+│   │   │   ├── releases/           Sourcemap upload + stack unminification
+│   │   │   ├── upload/             Screenshot upload endpoint
+│   │   │   ├── bugs/               GET/PATCH /projects/:id/bugs + AI chat
+│   │   │   ├── sessions/           GET /projects/:id/sessions
+│   │   │   ├── events/             GET /projects/:id/events
+│   │   │   ├── dashboard/          Analytics aggregation service
+│   │   │   ├── system/             Queue metrics + pipeline health tracking
+│   │   │   ├── retention/          Automated data retention/pruning
+│   │   │   ├── audit/              Audit log service
+│   │   │   ├── sdk/                SDK config endpoint
+│   │   │   ├── metrics/            Prometheus metrics endpoint
+│   │   │   └── user-notifications/ In-app notification bell
 │   │   └── shared/
-│   │       ├── guards/       ApiKeyGuard + JwtAuthGuard
-│   │       ├── prisma/       PrismaService (pg adapter)
-│   │       └── redis/        Redis provider (ioredis)
+│   │       ├── guards/             ApiKeyGuard + JwtAuthGuard + TenantAuthGuard
+│   │       ├── security/           SSRF guard + URL validation
+│   │       ├── http/               External API fetch helpers + auth utilities
+│   │       ├── template/           Notification template engine
+│   │       ├── retry/              Retry policy utilities
+│   │       ├── rate-limit/         Ingest rate limiting
+│   │       ├── prisma/             PrismaService (pg adapter)
+│   │       └── redis/              Redis provider (ioredis)
 │   └── .env.example
 │
-├── extension/                Chrome Extension (Manifest V3)
+├── extension/                      Chrome Extension (Manifest V3)
 │   ├── public/manifest.json
 │   └── src/
-│       ├── background/service-worker.ts   Buffer + flush (5s / 20 events)
+│       ├── background/service-worker.ts    Buffer + flush (5s / 20 events) + screenshot capture
+│       ├── offscreen/offscreen.ts          Offscreen document for tab screenshots
 │       ├── content/
-│       │   ├── shared.ts                  generateId, getSessionId, sendEvent, etc.
-│       │   ├── error-tracker.ts           window.onerror + unhandledrejection
-│       │   ├── network-tracker.ts         fetch + XHR intercept
-│       │   ├── console-tracker.ts         console.log/warn/error intercept
-│       │   └── dom-tracker.ts             clicks + SPA navigation
-│       └── popup/App.tsx                  API key config + enable/pause toggle
+│       │   ├── bridge.ts                   Content ↔ service worker message bridge
+│       │   ├── shared.ts                   generateId, getSessionId, sendEvent, etc.
+│       │   ├── error-tracker.ts            window.onerror + unhandledrejection
+│       │   ├── network-tracker.ts          fetch + XHR intercept
+│       │   ├── console-tracker.ts          console.log/warn/error intercept
+│       │   ├── dom-tracker.ts              clicks + SPA navigation
+│       │   └── replay-tracker.ts           rrweb session recording
+│       ├── shared/
+│       │   ├── runtime-config.ts           Remote config polling (sampling, replay toggle)
+│       │   ├── sampling.ts                 Client-side event sampling
+│       │   └── sanitize.ts                 PII scrubbing before sending
+│       └── popup/App.tsx                   API key config + enable/pause + tab targeting
 │
-├── dashboard/                React SPA (Vite)
+├── dashboard/                      React SPA (Vite + TailwindCSS)
 │   └── src/
 │       ├── pages/
-│       │   ├── LoginPage.tsx
-│       │   ├── ProjectsPage.tsx     Create projects, copy API key
-│       │   ├── SessionsPage.tsx     Sessions list per project
-│       │   ├── BugsPage.tsx         Bug list with severity/status filters
-│       │   └── BugDetailPage.tsx    AI summary, root cause, steps, fix, stack trace
-│       └── api.ts                   Typed API client
+│       │   ├── LoginPage.tsx               Login + OAuth buttons
+│       │   ├── OnboardingPage.tsx          First-run setup flow
+│       │   ├── ProjectsPage.tsx            Create projects, copy API key
+│       │   ├── OverviewPage.tsx            Analytics + metrics overview
+│       │   ├── BugsPage.tsx                Bug list with filters, bulk actions, SSE live updates
+│       │   ├── BugDetailPage.tsx           AI summary, root cause, steps, fix, stack trace, AI chat
+│       │   ├── ClustersPage.tsx            Semantic error clusters view
+│       │   ├── SessionsPage.tsx            Sessions list with timeline
+│       │   ├── ReleasesPage.tsx            Release + sourcemap management
+│       │   ├── ActivityFeedPage.tsx        Audit log / activity stream
+│       │   ├── IntegrationsPage.tsx        Configure Jira, GitHub, Slack, etc.
+│       │   ├── RulesPage.tsx               Rule builder UI
+│       │   ├── SystemHealthPage.tsx        Queue metrics + pipeline health
+│       │   └── SettingsPage.tsx            Project settings + retention config
+│       └── api.ts                          Typed API client
 │
-└── docker-compose.yml        PostgreSQL (pgvector) + Redis
+├── packages/
+│   └── sourcemap-upload/           npm CLI: @bug-intelligence/sourcemap-upload
+│       └── bin/cli.js              bi-upload-sourcemaps — uploads *.map files post-build
+│
+└── docker-compose.yml              PostgreSQL (pgvector) + Redis
 ```
 
 ---
@@ -100,7 +146,6 @@ Extension--/
 ### 1. Start infrastructure
 
 ```bash
-cd Extension--
 docker compose up -d
 ```
 
@@ -121,7 +166,10 @@ Edit `.env` and fill in:
 DATABASE_URL="postgresql://postgres:postgres@localhost:5432/bug_intelligence?schema=public"
 REDIS_URL="redis://localhost:6379"
 JWT_SECRET="your-long-random-secret"
-ANTHROPIC_API_KEY="sk-ant-..."   # get from console.anthropic.com
+JWT_REFRESH_SECRET="your-refresh-secret"
+AI_API_KEY="sk-ant-..."        # Anthropic key — get from console.anthropic.com
+AI_MODELS="claude-haiku-4-5-20251001"
+ALLOWED_ORIGINS="http://localhost:5173"
 ```
 
 ### 3. Run database migrations
@@ -130,7 +178,7 @@ ANTHROPIC_API_KEY="sk-ant-..."   # get from console.anthropic.com
 cd backend
 npm install
 npm run db:generate   # generates Prisma client
-npm run db:migrate    # runs migrations (creates all tables)
+npm run db:migrate    # creates all tables
 ```
 
 ### 4. Start the backend
@@ -154,8 +202,8 @@ Dashboard runs at `http://localhost:5173`.
 ### 6. Create your first project
 
 1. Open `http://localhost:5173` → register an account
-2. Create a project — copy the API key shown (it's only shown once)
-3. Note the project's API key: `bi_live_<64 hex chars>`
+2. Complete the onboarding flow → create a project
+3. Copy the API key shown — it's only displayed once (`bi_live_<64 hex chars>`)
 
 ### 7. Install the Chrome extension
 
@@ -169,19 +217,36 @@ Then in Chrome:
 1. Go to `chrome://extensions`
 2. Enable **Developer mode** (top right)
 3. Click **Load unpacked** → select the `extension/dist/` folder
-4. Click the Bug Intelligence icon in the toolbar
+4. Click the JinAi icon in the toolbar
 5. Paste your API key → click **Start Capture**
+
+### 8. (Optional) Upload sourcemaps for unminified stack traces
+
+```bash
+npm install -D @bug-intelligence/sourcemap-upload
+```
+
+Add to your build script:
+```json
+"build": "vite build && bi-upload-sourcemaps dist"
+```
+
+Set env vars:
+```bash
+BUG_INTELLIGENCE_PROJECT_ID=your-project-uuid
+BUG_INTELLIGENCE_API_KEY=bi_live_xxx
+BUG_INTELLIGENCE_API_URL=http://localhost:4000/api/v1
+```
 
 ---
 
 ## Auth Model
 
 ```
-Dashboard users  →  JWT (Bearer token)       login/register at /auth/*
-Extension        →  Project API Key          X-API-Key header on /ingest/batch
+Dashboard users  →  JWT (Bearer token, 15m) + refresh (7d)   /auth/*
+                    Google OAuth / GitHub OAuth               /auth/google, /auth/github
+Extension        →  Project API Key (X-API-Key header)        /ingest/batch, /upload/*
 ```
-
-The API key is the real security boundary. `allowed_origins` is a soft DX filter — set `block_unknown_origins: true` on a project to hard-enforce it.
 
 API key format: `bi_live_{64 hex chars}` (256 bits of entropy). Only the SHA-256 hash is stored in the database. The raw key is shown once at creation.
 
@@ -212,20 +277,7 @@ export class LinearProvider implements IntegrationProvider {
 }
 ```
 
-**2. Register it** — add to `integration.registry.ts`:
-
-```typescript
-constructor(meridian: MeridianProvider, jira: JiraProvider, github: GitHubProvider, linear: LinearProvider) {
-  this.providers = new Map<string, IntegrationProvider>([
-    [meridian.id, meridian],
-    [jira.id, jira],
-    [github.id, github],
-    [linear.id, linear],   // ← add this
-  ]);
-}
-```
-
-And add `LinearProvider` to the `IntegrationsModule` providers array. That's it — the dispatch worker resolves providers by ID automatically.
+**2. Register it** — add to `integration.registry.ts` and the `IntegrationsModule` providers array. The dispatch worker resolves providers by ID automatically.
 
 ---
 
@@ -248,7 +300,11 @@ The `ai-analysis` queue carries only IDs + fingerprint (not event data). The wor
 
 ### Clustering
 
-Each error gets a 1536-dim embedding. The clustering worker finds the nearest existing cluster centroid using pgvector cosine distance (`<=>`). If the distance is within the project's `clustering_threshold` (default 0.15), the error joins that cluster and the centroid is updated as a running mean. Otherwise a new cluster is created.
+Each error gets a 1536-dim vector embedding. The clustering worker finds the nearest existing cluster centroid using pgvector cosine distance (`<=>`). If the distance is within the project's `clustering_threshold` (default 0.15), the error joins that cluster and the centroid is updated as a running mean. Otherwise a new cluster is created.
+
+### Stack Unminification
+
+When sourcemaps are uploaded via `bi-upload-sourcemaps`, the backend stores them keyed by release version. On each new error, `stack-unminifier.ts` resolves the original file name and line number before the bug is passed to the AI — so Claude always sees readable stack traces.
 
 ### Unique Users
 
@@ -256,9 +312,9 @@ Each error gets a 1536-dim embedding. The clustering worker finds the nearest ex
 
 ---
 
-## Rule Engine (Phase 1)
+## Rule Engine
 
-Rules trigger automatic dispatch when conditions are met. Supported fields:
+Rules trigger automatic dispatch and/or notifications when conditions are met. Supported fields:
 
 | Field | Source | Operators |
 |---|---|---|
@@ -267,7 +323,7 @@ Rules trigger automatic dispatch when conditions are met. Supported fields:
 | `cluster.occurrences` | ErrorCluster.occurrence_count | `>`, `>=` |
 | `session.unique_users` | COUNT(DISTINCT session_id) in last 60 min | `>`, `>=` |
 
-Example rule (create via DB or future Rules API):
+Example rule:
 
 ```json
 {
@@ -290,17 +346,26 @@ Example rule (create via DB or future Rules API):
 |---|---|---|
 | `DATABASE_URL` | ✅ | PostgreSQL connection string |
 | `REDIS_URL` | ✅ | Redis connection string |
-| `JWT_SECRET` | ✅ | Secret for signing dashboard JWTs |
-| `ANTHROPIC_API_KEY` | ✅ | Anthropic API key for Claude Haiku |
+| `JWT_SECRET` | ✅ | Secret for signing access JWTs |
+| `JWT_REFRESH_SECRET` | ✅ | Secret for signing refresh JWTs |
+| `AI_API_KEY` | ✅ | Anthropic (or OpenRouter) API key |
+| `AI_MODELS` | ✅ | Comma-separated model fallback chain |
+| `ALLOWED_ORIGINS` | ✅ | CORS allowed origins |
+| `AI_BASE_URL` | ❌ | Override for OpenAI-compatible endpoints |
 | `PORT` | ❌ | Backend port (default: 4000) |
+| `MERIDIAN_BASE_URL` | ❌ | Meridian 3SC base URL |
 
 ---
 
-## Phase 2 (not yet built)
+## Tech Stack
 
-- Session replay (rrweb)
-- Screenshot auto-capture
-- Real Jira and GitHub provider implementations
-- Nested rule conditions (`any` / `all`)
-- Slack / email notification channel
-- AI debug chat
+| Layer | Technology |
+|---|---|
+| Backend | NestJS, TypeScript, BullMQ, Prisma |
+| Database | PostgreSQL 16 + pgvector |
+| Cache / Queue | Redis 7 |
+| AI | Anthropic Claude (Haiku), vector embeddings |
+| Frontend | React 18, Vite, TailwindCSS, Framer Motion |
+| Extension | Chrome Manifest V3, TypeScript, rrweb |
+| Auth | JWT, Google OAuth, GitHub OAuth |
+| Infra | Docker Compose, Prometheus metrics |
