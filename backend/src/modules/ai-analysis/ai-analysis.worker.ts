@@ -198,7 +198,7 @@ export class AiAnalysisWorker implements OnModuleInit, OnModuleDestroy {
               this.logger.error(
                 `Timeout waiting for AI cache on fingerprint=${fingerprint}`,
               );
-              await this.createFailedBug(projectId, sessionId, errorId);
+              await this.createFailedBug(projectId, sessionId, errorId, clusterId);
               await this.tracker.recordLatency(
                 'ai_analysis',
                 Date.now() - start,
@@ -216,7 +216,7 @@ export class AiAnalysisWorker implements OnModuleInit, OnModuleDestroy {
             );
             if (!llmResult) {
               await this.redis.del(aiLockKey);
-              await this.createFailedBug(projectId, sessionId, errorId);
+              await this.createFailedBug(projectId, sessionId, errorId, clusterId);
               await this.tracker.recordLatency(
                 'ai_analysis',
                 Date.now() - start,
@@ -395,6 +395,14 @@ export class AiAnalysisWorker implements OnModuleInit, OnModuleDestroy {
     errorId: string,
     fingerprint: string,
   ): Promise<string | null> {
+    // Retry of a previously failed job? The error already carries its cluster —
+    // reuse it instead of minting an orphan per BullMQ attempt.
+    const self = await this.prisma.error.findUnique({
+      where: { id: errorId },
+      select: { cluster_id: true },
+    });
+    if (self?.cluster_id) return self.cluster_id;
+
     // Find an existing cluster via any error with the same fingerprint in this project
     const existing = await this.prisma.error.findFirst({
       where: {
@@ -412,6 +420,12 @@ export class AiAnalysisWorker implements OnModuleInit, OnModuleDestroy {
         where: { id: existing.cluster_id },
         data: { occurrence_count: { increment: 1 }, last_seen_at: new Date() },
       });
+      // Link immediately — waiting until after the LLM succeeds strands the
+      // cluster on every failure path
+      await this.prisma.error.update({
+        where: { id: errorId },
+        data: { cluster_id: existing.cluster_id },
+      });
       return existing.cluster_id;
     }
 
@@ -421,7 +435,14 @@ export class AiAnalysisWorker implements OnModuleInit, OnModuleDestroy {
       VALUES (gen_random_uuid(), ${projectId}::uuid, 1, NOW(), NOW())
       RETURNING id
     `;
-    return result[0]?.id ?? null;
+    const clusterId = result[0]?.id ?? null;
+    if (clusterId) {
+      await this.prisma.error.update({
+        where: { id: errorId },
+        data: { cluster_id: clusterId },
+      });
+    }
+    return clusterId;
   }
 
   private async pollForClusterBug(
@@ -520,9 +541,10 @@ export class AiAnalysisWorker implements OnModuleInit, OnModuleDestroy {
     projectId: string,
     sessionId: string,
     errorId: string,
+    clusterId?: string | null,
   ) {
     try {
-      await this.prisma.bug.upsert({
+      const bug = await this.prisma.bug.upsert({
         where: { error_id: errorId },
         create: {
           project_id: projectId,
@@ -538,6 +560,15 @@ export class AiAnalysisWorker implements OnModuleInit, OnModuleDestroy {
         },
         update: {},
       });
+      // Keep the cluster linked so it never shows up as a ghost on the
+      // clusters page; a later successful retry of the same fingerprint
+      // reuses this cluster via the error's cluster_id.
+      if (clusterId) {
+        await this.prisma.errorCluster.updateMany({
+          where: { id: clusterId, bug_id: null },
+          data: { bug_id: bug.id },
+        });
+      }
     } catch (err) {
       this.logger.error(
         `Failed to create fallback bug: ${(err as Error).message}`,
