@@ -37,5 +37,7 @@ window.addEventListener('unhandledrejection', (e: PromiseRejectionEvent) => {
       ...(reason instanceof Error && reason.stack ? { stack: reason.stack } : {}),
     },
   };
+  // Same class of error as window.onerror — flush the replay buffer too
+  window.dispatchEvent(new CustomEvent('__bi_error__'));
   sendEvent(event);
 });
