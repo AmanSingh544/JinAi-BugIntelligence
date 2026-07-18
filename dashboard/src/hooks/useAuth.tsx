@@ -53,6 +53,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => { void fetchMe(); }, [fetchMe]);
 
+  // Silently re-issue the 15-minute access token while the app is open,
+  // so active users aren't logged out mid-session.
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      if (!localStorage.getItem('token')) return;
+      try {
+        const res = await api.auth.refresh();
+        localStorage.setItem('token', res.token);
+      } catch {
+        // expired/revoked token — request() already redirects to /login on 401
+      }
+    }, 10 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, []);
+
   const roleFor = useCallback((projectId: string): TenantRole | undefined => {
     for (const m of state.memberships) {
       if (m.projectIds.includes(projectId)) return m.role;

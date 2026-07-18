@@ -176,6 +176,7 @@ model Error {
   stack_unminified String?
   fingerprint    String
   dedup_bucket   DateTime                @db.Timestamptz
+  occurrence_count Int                   @default(1)
   vector         Unsupported("vector(1536)")?
   cluster_id     String?                 @db.Uuid
   created_at     DateTime                @default(now()) @db.Timestamptz

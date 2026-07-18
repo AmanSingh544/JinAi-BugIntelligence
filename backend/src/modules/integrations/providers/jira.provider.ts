@@ -1,8 +1,14 @@
 import { Injectable } from '@nestjs/common';
-import type { IntegrationProvider, BugReportPayload, JsonValue, TicketResult } from './integration.interface';
+import type {
+  IntegrationProvider,
+  BugReportPayload,
+  JsonValue,
+  TicketResult,
+} from './integration.interface';
 import { externalApiFetch } from '../../../shared/http/external-api-fetch';
 import { readJsonResponse } from '../../../shared/http/read-json-response';
 import { basicAuth } from '../../../shared/http/auth-helpers';
+import { ProviderError } from './provider-error';
 import { JIRA_SCHEMA } from './provider.schema';
 
 @Injectable()
@@ -15,7 +21,9 @@ export class JiraProvider implements IntegrationProvider {
     return domain.replace(/^https?:\/\//, '').replace(/\/$/, '');
   }
 
-  async validateCredentials(config: Record<string, JsonValue>): Promise<boolean> {
+  async validateCredentials(
+    config: Record<string, JsonValue>,
+  ): Promise<boolean> {
     const domain = this.normalizeDomain(config.domain as string);
     const email = config.email as string;
     const apiToken = config.apiToken as string;
@@ -32,13 +40,37 @@ export class JiraProvider implements IntegrationProvider {
     }
   }
 
-  async createTicket(payload: BugReportPayload, config: Record<string, JsonValue>): Promise<TicketResult> {
-    const domain = this.normalizeDomain(config.domain as string);
+  async createTicket(
+    payload: BugReportPayload,
+    config: Record<string, JsonValue>,
+  ): Promise<TicketResult> {
+    const domain = this.normalizeDomain((config.domain as string) ?? '');
     const email = config.email as string;
     const apiToken = config.apiToken as string;
     const projectKey = config.projectKey as string;
 
-    const priorityMap: Record<string, string> = { low: '4', medium: '3', high: '2', critical: '1' };
+    for (const [field, value] of Object.entries({
+      domain,
+      email,
+      apiToken,
+      projectKey,
+    })) {
+      if (!value) {
+        // 400 → isPermanent: a missing config field never heals on retry
+        throw new ProviderError({
+          providerId: this.id,
+          message: `Integration config is missing required field "${field}"`,
+          statusCode: 400,
+        });
+      }
+    }
+
+    const priorityMap: Record<string, string> = {
+      low: '4',
+      medium: '3',
+      high: '2',
+      critical: '1',
+    };
 
     const description = {
       type: 'doc',
@@ -58,11 +90,18 @@ export class JiraProvider implements IntegrationProvider {
         })),
         {
           type: 'paragraph',
-          content: [{ type: 'text', text: `Fix suggestion: ${payload.fixSuggestion}` }],
+          content: [
+            { type: 'text', text: `Fix suggestion: ${payload.fixSuggestion}` },
+          ],
         },
         {
           type: 'paragraph',
-          content: [{ type: 'text', text: `Stack trace:\n${payload.stackTrace ?? 'No stack trace'}` }],
+          content: [
+            {
+              type: 'text',
+              text: `Stack trace:\n${payload.stackTrace ?? 'No stack trace'}`,
+            },
+          ],
         },
       ],
     };
@@ -90,7 +129,10 @@ export class JiraProvider implements IntegrationProvider {
       body: JSON.stringify(body),
     });
 
-    const data = await readJsonResponse<{ key: string; id: string }>(this.id, res);
+    const data = await readJsonResponse<{ key: string; id: string }>(
+      this.id,
+      res,
+    );
     return {
       ticketId: data.id,
       url: `https://${domain}/browse/${data.key}`,

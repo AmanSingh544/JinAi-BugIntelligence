@@ -5,7 +5,7 @@ import {
   ArrowLeft, Play, Users, CheckCircle2, EyeOff, Send,
   AlertTriangle, GitBranch, Clock, Cpu, ChevronRight,
   MessageSquare, Layers, Copy, Check, ExternalLink, Sparkles,
-  Wrench, GitPullRequest, XCircle, RefreshCw,
+  Wrench, GitPullRequest, XCircle, RefreshCw, Pencil,
 } from 'lucide-react';
 import { api, type BugDetail, type SimilarBug, type ClusterMember, type ChatMessage, type FixAttempt } from '../api';
 import { useAuth } from '../hooks/useAuth';
@@ -169,6 +169,9 @@ export default function BugDetailPage() {
   const [copiedStack, setCopiedStack] = useState(false);
   const [fixAttempts, setFixAttempts] = useState<FixAttempt[]>([]);
   const [triggeringFix, setTriggeringFix] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [draft, setDraft] = useState({ summary: '', rootCause: '', fixSuggestion: '', steps: '' });
   const chatEndRef = useRef<HTMLDivElement>(null);
   const replayRef = useRef<HTMLDivElement>(null);
 
@@ -251,6 +254,35 @@ export default function BugDetailPage() {
     finally { setUpdating(false); }
   }
 
+  function startEdit() {
+    if (!bug) return;
+    setDraft({
+      summary: bug.summary ?? '',
+      rootCause: bug.rootCause ?? '',
+      fixSuggestion: bug.fixSuggestion ?? '',
+      steps: bug.stepsToReproduce.join('\n'),
+    });
+    setError('');
+    setEditing(true);
+  }
+
+  async function saveEdit() {
+    if (!projectId || !bugId) return;
+    setSavingEdit(true);
+    try {
+      await api.bugs.update(projectId, bugId, {
+        summary: draft.summary.trim(),
+        rootCause: draft.rootCause.trim(),
+        fixSuggestion: draft.fixSuggestion.trim(),
+        stepsToReproduce: draft.steps.split('\n').map((s) => s.trim()).filter(Boolean),
+      });
+      const fresh = await api.bugs.get(projectId, bugId);
+      setBug(fresh);
+      setEditing(false);
+    } catch (err) { setError((err as Error).message); }
+    finally { setSavingEdit(false); }
+  }
+
   const copyStack = useCallback(() => {
     if (!bug) return;
     void navigator.clipboard.writeText(`${bug.error.message}\n\n${bug.error.stack ?? ''}`);
@@ -307,7 +339,16 @@ export default function BugDetailPage() {
       <FadeUp delay={0}>
         <Card className="card-hover">
           <div className="flex items-start justify-between gap-4 mb-3">
-            <h1 className="text-[15px] font-bold text-th leading-snug flex-1">{bug.summary}</h1>
+            {editing ? (
+              <input
+                value={draft.summary}
+                onChange={(e) => setDraft((d) => ({ ...d, summary: e.target.value }))}
+                maxLength={500}
+                className="flex-1 text-[15px] font-bold text-th leading-snug bg-th-surface-2 border border-th rounded-md px-2 py-1 focus:outline-none focus:border-indigo-500/50"
+              />
+            ) : (
+              <h1 className="text-[15px] font-bold text-th leading-snug flex-1">{bug.summary}</h1>
+            )}
             <div className="flex items-center gap-2 flex-shrink-0">
               {bug.archivedAt && (
                 <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-zinc-700/50 text-th-3 uppercase tracking-wider">Archived</span>
@@ -369,22 +410,37 @@ export default function BugDetailPage() {
 
           {/* Actions */}
           <div className="flex flex-wrap gap-2 mt-4 pt-4 border-t border-th-sub">
-            {projectId && canResolve(projectId) && bug.status !== 'resolved' && (
+            {editing && (
+              <>
+                <Button size="sm" onClick={() => void saveEdit()} loading={savingEdit}>
+                  <Check size={12} /> Save
+                </Button>
+                <Button size="sm" variant="secondary" onClick={() => setEditing(false)} disabled={savingEdit}>
+                  Cancel
+                </Button>
+              </>
+            )}
+            {!editing && projectId && canResolve(projectId) && bug.status !== 'dispatched' && (
+              <Button size="sm" variant="secondary" onClick={startEdit}>
+                <Pencil size={12} /> Edit
+              </Button>
+            )}
+            {!editing && projectId && canResolve(projectId) && bug.status !== 'resolved' && (
               <Button size="sm" onClick={() => void setStatus('resolved')} loading={updating}>
                 <CheckCircle2 size={12} /> Resolve
               </Button>
             )}
-            {projectId && canResolve(projectId) && bug.status !== 'ignored' && (
+            {!editing && projectId && canResolve(projectId) && bug.status !== 'ignored' && (
               <Button size="sm" variant="secondary" onClick={() => void setStatus('ignored')} loading={updating}>
                 <EyeOff size={12} /> Ignore
               </Button>
             )}
-            {projectId && canResolve(projectId) && bug.status === 'open' && (
+            {!editing && projectId && canResolve(projectId) && bug.status === 'open' && (
               <Button size="sm" variant="secondary" onClick={() => void setStatus('dispatched')} loading={updating}>
                 <Send size={12} /> Dispatch
               </Button>
             )}
-            {projectId && canAssign(projectId) && currentUser && !bug.assignee && (
+            {!editing && projectId && canAssign(projectId) && currentUser && !bug.assignee && (
               <Button
                 size="sm"
                 variant="secondary"
@@ -402,7 +458,7 @@ export default function BugDetailPage() {
                 <Users size={12} /> Assign to me
               </Button>
             )}
-            {projectId && canManage(projectId) && bug.archivedAt && (
+            {!editing && projectId && canManage(projectId) && bug.archivedAt && (
               <Button
                 size="sm"
                 variant="secondary"
@@ -426,17 +482,26 @@ export default function BugDetailPage() {
 
       {/* ── AI Analysis grid ── */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        {[
-          { title: 'Root Cause', content: bug.rootCause, delay: 0.07 },
-          { title: 'Fix Suggestion', content: bug.fixSuggestion, delay: 0.14 },
-        ].map(({ title, content, delay }) => (
+        {([
+          { title: 'Root Cause', content: bug.rootCause, draftKey: 'rootCause' as const, delay: 0.07 },
+          { title: 'Fix Suggestion', content: bug.fixSuggestion, draftKey: 'fixSuggestion' as const, delay: 0.14 },
+        ]).map(({ title, content, draftKey, delay }) => (
           <FadeUp key={title} delay={delay}>
             <Card className="h-full card-hover">
               <div className="flex items-center gap-1.5 mb-2">
                 <div className="w-1 h-3.5 rounded-full bg-indigo-500/60" />
                 <CardTitle className="text-[11px] uppercase tracking-wider text-th-3">{title}</CardTitle>
               </div>
-              <p className="text-xs text-th-2 leading-relaxed">{content}</p>
+              {editing ? (
+                <textarea
+                  value={draft[draftKey]}
+                  onChange={(e) => setDraft((d) => ({ ...d, [draftKey]: e.target.value }))}
+                  rows={5}
+                  className="w-full text-xs text-th-2 leading-relaxed bg-th-surface-2 border border-th rounded-md px-2 py-1.5 focus:outline-none focus:border-indigo-500/50 resize-y"
+                />
+              ) : (
+                <p className="text-xs text-th-2 leading-relaxed">{content}</p>
+              )}
             </Card>
           </FadeUp>
         ))}
@@ -446,14 +511,24 @@ export default function BugDetailPage() {
               <div className="w-1 h-3.5 rounded-full bg-indigo-500/60" />
               <CardTitle className="text-[11px] uppercase tracking-wider text-th-3">Steps to Reproduce</CardTitle>
             </div>
-            <ol className="space-y-1.5">
-              {bug.stepsToReproduce.map((step, i) => (
-                <li key={i} className="flex gap-2 text-xs text-th-2">
-                  <span className="font-mono text-th-3 flex-shrink-0 select-none">{i + 1}.</span>
-                  {step}
-                </li>
-              ))}
-            </ol>
+            {editing ? (
+              <textarea
+                value={draft.steps}
+                onChange={(e) => setDraft((d) => ({ ...d, steps: e.target.value }))}
+                rows={5}
+                placeholder="One step per line"
+                className="w-full text-xs text-th-2 leading-relaxed bg-th-surface-2 border border-th rounded-md px-2 py-1.5 focus:outline-none focus:border-indigo-500/50 resize-y"
+              />
+            ) : (
+              <ol className="space-y-1.5">
+                {bug.stepsToReproduce.map((step, i) => (
+                  <li key={i} className="flex gap-2 text-xs text-th-2">
+                    <span className="font-mono text-th-3 flex-shrink-0 select-none">{i + 1}.</span>
+                    {step}
+                  </li>
+                ))}
+              </ol>
+            )}
           </Card>
         </FadeUp>
       </div>

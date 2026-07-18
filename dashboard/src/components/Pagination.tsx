@@ -30,6 +30,7 @@ export const Pagination: React.FC<PaginationProps> = ({ page, limit, total, onPa
       </span>
       <div className="flex items-center gap-1">
         <button
+          aria-label="Previous page"
           disabled={page <= 1}
           onClick={() => onPageChange(page - 1)}
           className="flex items-center justify-center w-7 h-7 rounded-md bg-th-surface border border-th text-th-2 hover:bg-th-surface-2 hover:border-th disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-150"
@@ -55,6 +56,7 @@ export const Pagination: React.FC<PaginationProps> = ({ page, limit, total, onPa
           )
         )}
         <button
+          aria-label="Next page"
           disabled={page >= totalPages}
           onClick={() => onPageChange(page + 1)}
           className="flex items-center justify-center w-7 h-7 rounded-md bg-th-surface border border-th text-th-2 hover:bg-th-surface-2 hover:border-th disabled:opacity-30 disabled:cursor-not-allowed transition-all duration-150"

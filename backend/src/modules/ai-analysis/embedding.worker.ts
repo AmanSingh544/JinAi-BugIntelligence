@@ -1,4 +1,10 @@
-import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Worker, Job } from 'bullmq';
 import OpenAI from 'openai';
@@ -7,6 +13,7 @@ import { REDIS_CLIENT } from '../../shared/redis/redis.provider';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { EmbeddingJob, EMBEDDING_QUEUE } from './embedding.queue';
 import { MetricsService } from '../../shared/metrics/metrics.service';
+import { ClusteringQueue } from '../clustering/clustering.queue';
 
 @Injectable()
 export class EmbeddingWorker implements OnModuleInit, OnModuleDestroy {
@@ -18,6 +25,7 @@ export class EmbeddingWorker implements OnModuleInit, OnModuleDestroy {
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     private readonly prisma: PrismaService,
     private readonly metrics: MetricsService,
+    private readonly clusteringQueue: ClusteringQueue,
     config: ConfigService,
   ) {
     this.ai = new OpenAI({
@@ -61,13 +69,17 @@ export class EmbeddingWorker implements OnModuleInit, OnModuleDestroy {
 
       const embeddingModel = process.env.AI_EMBEDDING_MODEL;
       if (!embeddingModel) {
-        this.logger.debug(`No AI_EMBEDDING_MODEL configured — skipping embedding for error=${errorId}`);
+        this.logger.debug(
+          `No AI_EMBEDDING_MODEL configured — skipping embedding for error=${errorId}`,
+        );
         return;
       }
 
       // Skip jobs with insufficient text
       if (text.length < 10) {
-        this.logger.warn(`Skipping embedding for error=${errorId}: text too short (${text.length} chars)`);
+        this.logger.warn(
+          `Skipping embedding for error=${errorId}: text too short (${text.length} chars)`,
+        );
         return;
       }
 
@@ -88,15 +100,36 @@ export class EmbeddingWorker implements OnModuleInit, OnModuleDestroy {
           WHERE id = ${errorId}::uuid
         `;
 
-        this.logger.debug(`Embedding generated for error=${errorId} dim=${embedding.length} in ${Date.now() - start}ms`);
+        // Hand off to semantic clustering now that the vector exists
+        const error = await this.prisma.error.findUnique({
+          where: { id: errorId },
+          select: { project_id: true },
+        });
+        if (error) {
+          await this.clusteringQueue.add({
+            projectId: error.project_id,
+            errorId,
+            vector: embedding,
+          });
+        }
+
+        this.logger.debug(
+          `Embedding generated for error=${errorId} dim=${embedding.length} in ${Date.now() - start}ms`,
+        );
       } catch (err) {
-        this.logger.error(`Embedding generation failed for error=${errorId}: ${(err as Error).message}`);
+        this.logger.error(
+          `Embedding generation failed for error=${errorId}: ${(err as Error).message}`,
+        );
         throw err; // Let BullMQ retry
       }
     });
   }
 
-  protected async writeToDlq(data: EmbeddingJob, error: Error, attempts: number) {
+  protected async writeToDlq(
+    data: EmbeddingJob,
+    error: Error,
+    attempts: number,
+  ) {
     try {
       await this.prisma.embeddingFailure.create({
         data: {
@@ -107,7 +140,9 @@ export class EmbeddingWorker implements OnModuleInit, OnModuleDestroy {
         },
       });
     } catch (dbErr) {
-      this.logger.error(`Failed to write embedding DLQ: ${(dbErr as Error).message}`);
+      this.logger.error(
+        `Failed to write embedding DLQ: ${(dbErr as Error).message}`,
+      );
     }
   }
 }

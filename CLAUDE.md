@@ -75,7 +75,7 @@ Queue payloads are lightweight (IDs + fingerprint only); workers fetch full cont
 
 ### Auth
 
-- **Dashboard users**: JWT Bearer tokens (15m access + 7d refresh)
+- **Dashboard users**: JWT Bearer tokens (15m access; no refresh flow — dashboard redirects to login on 401; logout revokes via Redis `jti` blacklist)
 - **Extension**: `X-API-Key` header. Raw key shown once; SHA-256 hash stored in DB. Format: `bi_live_{64 hex chars}`
 - Guards: `JwtAuthGuard`, `ApiKeyGuard` in `backend/src/shared/guards/`
 

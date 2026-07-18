@@ -5,6 +5,8 @@ export class ProviderError extends Error {
   readonly retryAfterSeconds?: number;
   readonly isRateLimit: boolean;
   readonly isServerError: boolean;
+  /** 4xx errors that retrying can never fix (bad credentials, missing repo/project, invalid payload). */
+  readonly isPermanent: boolean;
   readonly providerId: string;
 
   constructor(opts: {
@@ -13,6 +15,8 @@ export class ProviderError extends Error {
     statusCode: number;
     retryAfterSeconds?: number;
     responseBody?: string;
+    /** Force rate-limit classification when the provider signals it without a 429 (e.g. GitHub's 403 + X-RateLimit-Remaining: 0). */
+    rateLimit?: boolean;
   }) {
     super(
       `[${opts.providerId}] ${opts.message}` +
@@ -23,8 +27,13 @@ export class ProviderError extends Error {
     this.providerId = opts.providerId;
     this.statusCode = opts.statusCode;
     this.retryAfterSeconds = opts.retryAfterSeconds;
-    this.isRateLimit = opts.statusCode === 429;
+    this.isRateLimit = opts.rateLimit ?? opts.statusCode === 429;
     this.isServerError = opts.statusCode >= 500 && opts.statusCode < 600;
+    this.isPermanent =
+      !this.isRateLimit &&
+      opts.statusCode >= 400 &&
+      opts.statusCode < 500 &&
+      opts.statusCode !== 408; // request timeout is transient
   }
 }
 

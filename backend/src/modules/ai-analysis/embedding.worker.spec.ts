@@ -5,12 +5,20 @@ import { EmbeddingWorker } from './embedding.worker';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { MetricsService } from '../../shared/metrics/metrics.service';
 import { REDIS_CLIENT } from '../../shared/redis/redis.provider';
+import { ClusteringQueue } from '../clustering/clustering.queue';
 
 const mockPrisma = () => ({
   $executeRaw: jest.fn(),
+  error: {
+    findUnique: jest.fn().mockResolvedValue({ project_id: 'p1' }),
+  },
   embeddingFailure: {
     create: jest.fn(),
   },
+});
+
+const mockClusteringQueue = () => ({
+  add: jest.fn(),
 });
 
 const mockMetrics = () => ({
@@ -46,6 +54,7 @@ describe('EmbeddingWorker', () => {
         { provide: MetricsService, useFactory: mockMetrics },
         { provide: ConfigService, useFactory: mockConfig },
         { provide: REDIS_CLIENT, useFactory: mockRedis },
+        { provide: ClusteringQueue, useFactory: mockClusteringQueue },
       ],
     }).compile();
 
@@ -92,6 +101,11 @@ describe('EmbeddingWorker', () => {
         input: expect.stringContaining('meaningful error'),
       }));
       expect(prisma.$executeRaw).toHaveBeenCalled();
+      expect((worker as any).clusteringQueue.add).toHaveBeenCalledWith({
+        projectId: 'p1',
+        errorId: 'e1',
+        vector: mockEmbedding,
+      });
     });
 
     it('handles empty embedding response gracefully', async () => {

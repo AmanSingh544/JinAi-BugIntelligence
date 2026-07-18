@@ -32,7 +32,9 @@ export async function externalApiFetch(
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   if (options.signal) {
-    options.signal.addEventListener('abort', () => controller.abort(), { once: true });
+    options.signal.addEventListener('abort', () => controller.abort(), {
+      once: true,
+    });
   }
 
   let res: Response;
@@ -57,13 +59,26 @@ export async function externalApiFetch(
 
   if (!res.ok) {
     const text = await res.text().catch(() => 'Unknown error');
-    const retryAfter = parseRetryAfter(res.headers.get('retry-after'));
+    let retryAfter = parseRetryAfter(res.headers.get('retry-after'));
+
+    // GitHub signals primary rate limits as 403 + X-RateLimit-Remaining: 0
+    // (with the reset time as a unix timestamp) rather than a 429.
+    const ghRateLimited =
+      res.status === 403 && res.headers.get('x-ratelimit-remaining') === '0';
+    if (ghRateLimited && retryAfter === undefined) {
+      const reset = Number(res.headers.get('x-ratelimit-reset'));
+      if (Number.isFinite(reset) && reset > 0) {
+        retryAfter = Math.max(1, Math.ceil(reset - Date.now() / 1000));
+      }
+    }
+
     throw new ProviderError({
       providerId,
       message: `HTTP ${res.status}: ${text}`,
       statusCode: res.status,
       retryAfterSeconds: retryAfter,
       responseBody: text,
+      rateLimit: ghRateLimited || undefined,
     });
   }
 

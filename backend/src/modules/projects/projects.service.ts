@@ -24,7 +24,13 @@ export class ProjectsService {
         block_unknown_origins: dto.block_unknown_origins ?? false,
         clustering_threshold: dto.clustering_threshold ?? 0.15,
       },
-      select: { id: true, name: true, allowed_origins: true, clustering_threshold: true, created_at: true },
+      select: {
+        id: true,
+        name: true,
+        allowed_origins: true,
+        clustering_threshold: true,
+        created_at: true,
+      },
     });
 
     // Create default environments
@@ -37,7 +43,13 @@ export class ProjectsService {
   async findAll(tenantId: string) {
     return this.prisma.project.findMany({
       where: { tenant_id: tenantId },
-      select: { id: true, name: true, allowed_origins: true, clustering_threshold: true, created_at: true },
+      select: {
+        id: true,
+        name: true,
+        allowed_origins: true,
+        clustering_threshold: true,
+        created_at: true,
+      },
       orderBy: { created_at: 'desc' },
     });
   }
@@ -45,10 +57,23 @@ export class ProjectsService {
   async findOne(tenantId: string, projectId: string) {
     const project = await this.prisma.project.findFirst({
       where: { id: projectId, tenant_id: tenantId },
-      select: { id: true, name: true, allowed_origins: true, block_unknown_origins: true, clustering_threshold: true, created_at: true },
+      select: {
+        id: true,
+        name: true,
+        allowed_origins: true,
+        block_unknown_origins: true,
+        clustering_threshold: true,
+        created_at: true,
+      },
     });
     if (!project) throw new NotFoundException('Project not found');
     return project;
+  }
+
+  async remove(tenantId: string, projectId: string) {
+    await this.findOne(tenantId, projectId); // 404 if not in this tenant
+    await this.prisma.project.delete({ where: { id: projectId } });
+    return { deleted: true };
   }
 
   async rotateApiKey(tenantId: string, projectId: string) {

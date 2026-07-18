@@ -18,15 +18,16 @@ vi.mock('../api', () => ({
 }));
 
 describe('SessionTimeline', () => {
-  it('renders loading state initially', () => {
-    render(<SessionTimeline projectId="p1" sessionId="s1" />);
-    expect(screen.getByText('Loading timeline…')).toBeInTheDocument();
+  it('renders skeleton placeholders while loading', () => {
+    const { container } = render(<SessionTimeline projectId="p1" sessionId="s1" />);
+    expect(container.querySelectorAll('.animate-pulse').length).toBeGreaterThan(0);
   });
 
   it('renders events after loading', async () => {
     render(<SessionTimeline projectId="p1" sessionId="s1" />);
     expect(await screen.findByText('Something broke')).toBeInTheDocument();
-    expect(screen.getByText('clicked #btn')).toBeInTheDocument();
+    expect(screen.getByText('#btn')).toBeInTheDocument();
+    expect(screen.getByText('CLICK')).toBeInTheDocument();
   });
 
   it('expands payload on click', async () => {

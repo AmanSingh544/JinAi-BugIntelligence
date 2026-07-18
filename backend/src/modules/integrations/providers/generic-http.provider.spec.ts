@@ -1,5 +1,6 @@
 import { GenericHttpProvider } from './generic-http.provider';
 import { ProviderError } from './provider-error';
+import type { BugReportPayload } from './integration.interface';
 
 // Mock the HTTP utilities
 jest.mock('../../../shared/http/external-api-fetch', () => ({
@@ -35,15 +36,17 @@ describe('GenericHttpProvider', () => {
     responseMapping: { ticketIdPath: 'data.id', ticketUrlPath: 'data.url' },
   });
 
-  const bugPayload = () => ({
+  const bugPayload = (): BugReportPayload => ({
     bugId: 'b1',
+    projectId: 'p1',
     summary: 'Crash on login',
     rootCause: 'Null pointer',
-    stepsToReproduce: '',
+    stepsToReproduce: [],
     fixSuggestion: '',
     severity: 'high',
     errorMessage: 'TypeError',
     stackTrace: '',
+    sessionUrl: 'http://localhost:5173/sessions/s1',
     affectedUrl: 'http://app/login',
     sessionId: 's1',
     browser: 'Chrome',

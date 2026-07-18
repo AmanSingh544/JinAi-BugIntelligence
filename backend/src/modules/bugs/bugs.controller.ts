@@ -1,7 +1,22 @@
-import { BadRequestException, Body, Controller, ForbiddenException, Get, Logger, NotFoundException, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
-import { PaginationDto, PaginatedResult } from '../../shared/dto/pagination.dto';
+import {
+  BadRequestException,
+  Body,
+  ConflictException,
+  Controller,
+  ForbiddenException,
+  Get,
+  Logger,
+  NotFoundException,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
+import { PaginatedResult } from '../../shared/dto/pagination.dto';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { IsIn, IsString } from 'class-validator';
+import { IsArray, IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
+import type { Prisma } from '@prisma/client';
 import { JwtAuthGuard } from '../../shared/guards/jwt-auth.guard';
 import { TenantAuthGuard } from '../auth/tenant-auth.guard';
 import { AuthorizationService } from '../auth/authorization.service';
@@ -47,9 +62,27 @@ class AssignBugDto {
   userId!: string;
 }
 
-class BulkStatusDto {
-  bugIds!: string[];
-  status!: string;
+class UpdateBugDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  summary?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(10000)
+  rootCause?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(10000)
+  fixSuggestion?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @MaxLength(1000, { each: true })
+  stepsToReproduce?: string[];
 }
 
 @ApiTags('bugs')
@@ -143,7 +176,11 @@ export class BugsController {
     @Query('includeArchived') includeArchived?: string,
   ) {
     const bug = await this.prisma.bug.findFirstOrThrow({
-      where: { id: bugId, project_id: projectId, ...bugVisibilityWhere(includeArchived === 'true') },
+      where: {
+        id: bugId,
+        project_id: projectId,
+        ...bugVisibilityWhere(includeArchived === 'true'),
+      },
       include: {
         assignee: { select: { id: true, email: true } },
         regression_release: { select: { id: true, version: true } },
@@ -159,17 +196,82 @@ export class BugsController {
     return {
       ...bug,
       regressionDetectedAt: bug.regression_detected_at,
-      assignee: bug.assignee ? { id: bug.assignee.id, email: bug.assignee.email } : undefined,
+      assignee: bug.assignee
+        ? { id: bug.assignee.id, email: bug.assignee.email }
+        : undefined,
       regressionRelease: bug.regression_release
-        ? { id: bug.regression_release.id, version: bug.regression_release.version }
+        ? {
+            id: bug.regression_release.id,
+            version: bug.regression_release.version,
+          }
         : undefined,
       release: bug.error.release
         ? { id: bug.error.release.id, version: bug.error.release.version }
         : undefined,
       cluster: bug.error.cluster
-        ? { id: bug.error.cluster.id, occurrenceCount: bug.error.cluster.occurrence_count }
+        ? {
+            id: bug.error.cluster.id,
+            occurrenceCount: bug.error.cluster.occurrence_count,
+          }
         : undefined,
     };
+  }
+
+  @Patch(':bugId')
+  async updateBug(
+    @Param('projectId') projectId: string,
+    @Param('bugId') bugId: string,
+    @Body() dto: UpdateBugDto,
+    @CurrentUser('sub') userId: string,
+    @CurrentTenant() tenant: TenantContext,
+  ) {
+    const canEdit = await this.authz.canResolveBug(userId, bugId);
+    if (!canEdit) {
+      throw new ForbiddenException('You do not have permission to edit this bug');
+    }
+
+    const existing = await this.prisma.bug.findFirst({
+      where: { id: bugId, project_id: projectId },
+      select: {
+        status: true,
+        deliveries: { where: { status: 'success' }, select: { id: true }, take: 1 },
+      },
+    });
+    if (!existing) throw new NotFoundException('Bug not found');
+
+    // Once dispatched, the text is locked — the external ticket already carries it
+    // and edits here would silently diverge from what was filed.
+    if (existing.status === 'dispatched' || existing.deliveries.length > 0) {
+      throw new ConflictException(
+        'This bug has already been dispatched to an integration — its text can no longer be edited',
+      );
+    }
+
+    const data: Prisma.BugUncheckedUpdateInput = {};
+    if (dto.summary !== undefined) data.summary = dto.summary;
+    if (dto.rootCause !== undefined) data.root_cause = dto.rootCause;
+    if (dto.fixSuggestion !== undefined) data.fix_suggestion = dto.fixSuggestion;
+    if (dto.stepsToReproduce !== undefined) data.steps_to_reproduce = dto.stepsToReproduce;
+
+    if (Object.keys(data).length === 0) {
+      throw new BadRequestException('No editable fields provided');
+    }
+
+    const bug = await this.prisma.bug.update({
+      where: { id: bugId },
+      data,
+    });
+
+    await this.audit.log({
+      tenantId: tenant.tenantId,
+      actorId: userId,
+      action: 'bug_updated',
+      entityType: 'bug',
+      entityId: bugId,
+      metadata: { projectId, fields: Object.keys(data) },
+    });
+
+    return bug;
   }
 
   @Patch(':bugId/status')
@@ -182,7 +284,9 @@ export class BugsController {
   ) {
     const canResolve = await this.authz.canResolveBug(userId, bugId);
     if (!canResolve) {
-      throw new ForbiddenException('You do not have permission to change this bug\'s status');
+      throw new ForbiddenException(
+        "You do not have permission to change this bug's status",
+      );
     }
     const bug = await this.prisma.bug.update({
       where: { id: bugId, project_id: projectId },
@@ -197,8 +301,11 @@ export class BugsController {
       metadata: { projectId, previousStatus: bug.status },
     });
     this.sse.broadcast(
-      { event: 'bug:status_changed', data: { bugId, projectId, status: dto.status } },
-      (client) => client.tenantId === tenant.tenantId,
+      {
+        event: 'bug:status_changed',
+        data: { bugId, projectId, status: dto.status },
+      },
+      { tenantId: tenant.tenantId },
     );
 
     // Close any open autofix PR when bug is manually resolved or archived
@@ -226,18 +333,27 @@ export class BugsController {
         { method: 'PATCH', body: JSON.stringify({ state: 'closed' }) },
       );
       if (!res.ok) {
-        this.logger.warn(`Could not close PR #${attempt.pr_number} for bug=${bugId} [${res.status}]`);
+        this.logger.warn(
+          `Could not close PR #${attempt.pr_number} for bug=${bugId} [${res.status}]`,
+        );
       } else {
-        this.logger.log(`Closed PR #${attempt.pr_number} for bug=${bugId} (bug resolved manually)`);
+        this.logger.log(
+          `Closed PR #${attempt.pr_number} for bug=${bugId} (bug resolved manually)`,
+        );
       }
 
       await this.prisma.bugFixAttempt.update({
         where: { id: attempt.id },
-        data: { status: 'cancelled', failure_reason: 'Bug resolved manually before PR was merged' },
+        data: {
+          status: 'cancelled',
+          failure_reason: 'Bug resolved manually before PR was merged',
+        },
       });
     } catch (err) {
       // Never let PR close failure affect the bug status update
-      this.logger.warn(`closeOpenAutofixPr failed for bug=${bugId}: ${(err as Error).message}`);
+      this.logger.warn(
+        `closeOpenAutofixPr failed for bug=${bugId}: ${(err as Error).message}`,
+      );
     }
   }
 
@@ -248,16 +364,25 @@ export class BugsController {
     @CurrentUser('sub') userId: string,
     @CurrentTenant() tenant: TenantContext,
   ) {
-    const bug = await this.prisma.bug.findUnique({ where: { id: bugId, project_id: projectId } });
+    const bug = await this.prisma.bug.findUnique({
+      where: { id: bugId, project_id: projectId },
+    });
     if (!bug) throw new NotFoundException('Bug not found');
 
     const integrations = await this.prisma.projectIntegration.findMany({
       where: { project_id: projectId, is_active: true },
     });
-    if (integrations.length === 0) throw new BadRequestException('No active integrations configured for this project');
+    if (integrations.length === 0)
+      throw new BadRequestException(
+        'No active integrations configured for this project',
+      );
 
     for (const integration of integrations) {
-      await this.dispatchQueue.add({ bugId, integrationId: integration.id, attempt: 1 });
+      await this.dispatchQueue.add({
+        bugId,
+        integrationId: integration.id,
+        attempt: 1,
+      });
     }
 
     await this.audit.log({
@@ -282,7 +407,9 @@ export class BugsController {
   ) {
     const canAssign = await this.authz.canAssignBug(userId, bugId);
     if (!canAssign) {
-      throw new ForbiddenException('You do not have permission to assign this bug');
+      throw new ForbiddenException(
+        'You do not have permission to assign this bug',
+      );
     }
     const bug = await this.prisma.bug.update({
       where: { id: bugId, project_id: projectId },
@@ -299,8 +426,11 @@ export class BugsController {
       metadata: { projectId, assignedTo: dto.userId },
     });
     this.sse.broadcast(
-      { event: 'bug:assigned', data: { bugId, projectId, assignedTo: dto.userId } },
-      (client) => client.tenantId === tenant.tenantId,
+      {
+        event: 'bug:assigned',
+        data: { bugId, projectId, assignedTo: dto.userId },
+      },
+      { tenantId: tenant.tenantId },
     );
 
     // Notify the assignee
@@ -318,7 +448,9 @@ export class BugsController {
 
     return {
       ...bug,
-      assignee: bug.assignee ? { id: bug.assignee.id, email: bug.assignee.email } : undefined,
+      assignee: bug.assignee
+        ? { id: bug.assignee.id, email: bug.assignee.email }
+        : undefined,
     };
   }
 
@@ -401,8 +533,11 @@ export class BugsController {
         metadata: { projectId, bulk: true },
       });
       this.sse.broadcast(
-        { event: 'bug:status_changed', data: { bugId, projectId, status: dto.status } },
-        (client) => client.tenantId === tenant.tenantId,
+        {
+          event: 'bug:status_changed',
+          data: { bugId, projectId, status: dto.status },
+        },
+        { tenantId: tenant.tenantId },
       );
     }
     return { updated: results.length };
@@ -464,7 +599,9 @@ export class BugsController {
     @CurrentTenant() tenant: TenantContext,
   ) {
     if (!(await this.authz.canManageProject(userId, projectId))) {
-      throw new ForbiddenException('You do not have permission to archive bugs in this project');
+      throw new ForbiddenException(
+        'You do not have permission to archive bugs in this project',
+      );
     }
     const job = await this.archiveQueue.add({
       projectId,
@@ -490,7 +627,9 @@ export class BugsController {
     @CurrentTenant() tenant: TenantContext,
   ) {
     if (!(await this.authz.canManageProject(userId, projectId))) {
-      throw new ForbiddenException('You do not have permission to unarchive bugs in this project');
+      throw new ForbiddenException(
+        'You do not have permission to unarchive bugs in this project',
+      );
     }
     const bug = await this.prisma.bug.update({
       where: { id: bugId, project_id: projectId },
@@ -506,7 +645,7 @@ export class BugsController {
     });
     this.sse.broadcast(
       { event: 'bug:unarchived', data: { bugId, projectId } },
-      (client) => client.tenantId === tenant.tenantId,
+      { tenantId: tenant.tenantId },
     );
     return bug;
   }
@@ -540,7 +679,9 @@ export class BugsController {
     @CurrentTenant() tenant: TenantContext,
   ) {
     if (!(await this.authz.canManageProject(userId, projectId))) {
-      throw new ForbiddenException('You do not have permission to trigger fix attempts');
+      throw new ForbiddenException(
+        'You do not have permission to trigger fix attempts',
+      );
     }
 
     const bug = await this.prisma.bug.findFirst({
@@ -552,13 +693,17 @@ export class BugsController {
       throw new BadRequestException(`Cannot fix a ${bug.status} bug`);
     }
 
-    const repo = await this.prisma.projectRepository.findUnique({ where: { project_id: projectId } });
-    if (!repo) throw new BadRequestException('No repository connected to this project');
+    const repo = await this.prisma.projectRepository.findUnique({
+      where: { project_id: projectId },
+    });
+    if (!repo)
+      throw new BadRequestException('No repository connected to this project');
 
     const active = await this.prisma.bugFixAttempt.count({
       where: { bug_id: bugId, status: { notIn: ['failed', 'cancelled'] } },
     });
-    if (active > 0) throw new BadRequestException('A fix attempt is already in progress');
+    if (active > 0)
+      throw new BadRequestException('A fix attempt is already in progress');
 
     await this.fixQueue.add({
       bugId,
@@ -567,7 +712,10 @@ export class BugsController {
       requireApproval: body.requireApproval ?? true,
     });
 
-    await this.prisma.bug.update({ where: { id: bugId }, data: { fix_status: 'fix_pending' } });
+    await this.prisma.bug.update({
+      where: { id: bugId },
+      data: { fix_status: 'fix_pending' },
+    });
 
     await this.audit.log({
       tenantId: tenant.tenantId,
@@ -575,7 +723,11 @@ export class BugsController {
       action: 'fix_attempt_triggered',
       entityType: 'bug',
       entityId: bugId,
-      metadata: { projectId, manual: true, requireApproval: body.requireApproval ?? true },
+      metadata: {
+        projectId,
+        manual: true,
+        requireApproval: body.requireApproval ?? true,
+      },
     });
 
     return { message: 'Fix generation queued', bugId };
@@ -590,7 +742,9 @@ export class BugsController {
     @CurrentTenant() tenant: TenantContext,
   ) {
     if (!(await this.authz.canManageProject(userId, projectId))) {
-      throw new ForbiddenException('You do not have permission to cancel fix attempts');
+      throw new ForbiddenException(
+        'You do not have permission to cancel fix attempts',
+      );
     }
 
     const attempt = await this.prisma.bugFixAttempt.findFirst({
@@ -598,7 +752,9 @@ export class BugsController {
     });
     if (!attempt) throw new NotFoundException('Fix attempt not found');
     if (['failed', 'cancelled', 'merged'].includes(attempt.status)) {
-      throw new BadRequestException(`Cannot cancel attempt in status: ${attempt.status}`);
+      throw new BadRequestException(
+        `Cannot cancel attempt in status: ${attempt.status}`,
+      );
     }
 
     const updated = await this.prisma.bugFixAttempt.update({

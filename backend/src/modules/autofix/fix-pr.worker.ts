@@ -1,4 +1,10 @@
-import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import { Worker, Job } from 'bullmq';
 import Redis from 'ioredis';
 import { REDIS_CLIENT } from '../../shared/redis/redis.provider';
@@ -41,7 +47,9 @@ export class FixPrWorker implements OnModuleInit, OnModuleDestroy {
   private async process(job: Job<FixPrJob>) {
     return this.metrics.wrapJob('fix-pr-creation', async () => {
       const { attemptId, bugId, projectId } = job.data;
-      this.logger.log(`PR creation started for attempt=${attemptId} bug=${bugId}`);
+      this.logger.log(
+        `PR creation started for attempt=${attemptId} bug=${bugId}`,
+      );
 
       // ── 1. Load attempt + related data ───────────────────────────────────────
       const attempt = await this.prisma.bugFixAttempt.findUnique({
@@ -57,12 +65,22 @@ export class FixPrWorker implements OnModuleInit, OnModuleDestroy {
         },
       });
 
-      if (!attempt) return this.logger.warn(`Attempt ${attemptId} not found — skipping`);
+      if (!attempt)
+        return this.logger.warn(`Attempt ${attemptId} not found — skipping`);
       if (attempt.status !== 'validated') {
-        return this.logger.warn(`Attempt ${attemptId} status=${attempt.status} (not validated) — skipping`);
+        return this.logger.warn(
+          `Attempt ${attemptId} status=${attempt.status} (not validated) — skipping`,
+        );
       }
-      if (!attempt.target_file || !attempt.fixed_code || attempt.start_line == null) {
-        return this.failAttempt(attemptId, 'Attempt is missing required fix data');
+      if (
+        !attempt.target_file ||
+        !attempt.fixed_code ||
+        attempt.start_line == null
+      ) {
+        return this.failAttempt(
+          attemptId,
+          'Attempt is missing required fix data',
+        );
       }
 
       const repo = attempt.repository;
@@ -71,15 +89,29 @@ export class FixPrWorker implements OnModuleInit, OnModuleDestroy {
       // ── 2. Get branch SHA ────────────────────────────────────────────────────
       let baseSha: string;
       try {
-        baseSha = await this.getBranchSha(repo.installation_id, repo.github_owner, repo.github_repo, repo.default_branch);
+        baseSha = await this.getBranchSha(
+          repo.installation_id,
+          repo.github_owner,
+          repo.github_repo,
+          repo.default_branch,
+        );
       } catch (err) {
-        return this.failAttempt(attemptId, `Failed to get branch SHA: ${(err as Error).message}`);
+        return this.failAttempt(
+          attemptId,
+          `Failed to get branch SHA: ${(err as Error).message}`,
+        );
       }
 
       // ── 3. Create fix branch ─────────────────────────────────────────────────
       const branchName = this.buildBranchName(bugId, attemptId);
       try {
-        await this.createBranch(repo.installation_id, repo.github_owner, repo.github_repo, branchName, baseSha);
+        await this.createBranch(
+          repo.installation_id,
+          repo.github_owner,
+          repo.github_repo,
+          branchName,
+          baseSha,
+        );
       } catch (err) {
         const msg = (err as Error).message;
         if (!msg.includes('already exists')) {
@@ -99,7 +131,10 @@ export class FixPrWorker implements OnModuleInit, OnModuleDestroy {
           branchName,
         );
       } catch (err) {
-        return this.failAttempt(attemptId, `Failed to get file SHA: ${(err as Error).message}`);
+        return this.failAttempt(
+          attemptId,
+          `Failed to get file SHA: ${(err as Error).message}`,
+        );
       }
 
       // ── 5. Fetch current file content from branch, apply fix ─────────────────
@@ -113,23 +148,32 @@ export class FixPrWorker implements OnModuleInit, OnModuleDestroy {
           branchName,
         );
       } catch (err) {
-        return this.failAttempt(attemptId, `Failed to fetch file: ${(err as Error).message}`);
+        return this.failAttempt(
+          attemptId,
+          `Failed to fetch file: ${(err as Error).message}`,
+        );
       }
 
       const newContent = this.applyFix(
         currentContent,
-        attempt.start_line!,
-        attempt.end_line ?? attempt.start_line!,
+        attempt.start_line,
+        attempt.end_line ?? attempt.start_line,
         attempt.original_code ?? '',
         attempt.fixed_code,
       );
 
       if (!newContent) {
-        return this.failAttempt(attemptId, 'Source mismatch when re-applying fix to branch content — branch may have diverged');
+        return this.failAttempt(
+          attemptId,
+          'Source mismatch when re-applying fix to branch content — branch may have diverged',
+        );
       }
 
       // ── 6. Commit the fix to the branch ──────────────────────────────────────
-      const commitMessage = this.buildCommitMessage(bug.error.message, attempt.fix_explanation ?? '');
+      const commitMessage = this.buildCommitMessage(
+        bug.error.message,
+        attempt.fix_explanation ?? '',
+      );
       try {
         await this.commitFile(
           repo.installation_id,
@@ -142,7 +186,10 @@ export class FixPrWorker implements OnModuleInit, OnModuleDestroy {
           commitMessage,
         );
       } catch (err) {
-        return this.failAttempt(attemptId, `Failed to commit fix: ${(err as Error).message}`);
+        return this.failAttempt(
+          attemptId,
+          `Failed to commit fix: ${(err as Error).message}`,
+        );
       }
 
       // ── 7. Open the pull request ──────────────────────────────────────────────
@@ -164,17 +211,31 @@ export class FixPrWorker implements OnModuleInit, OnModuleDestroy {
         prNumber = pr.number;
         prUrl = pr.html_url;
       } catch (err) {
-        return this.failAttempt(attemptId, `Failed to create PR: ${(err as Error).message}`);
+        return this.failAttempt(
+          attemptId,
+          `Failed to create PR: ${(err as Error).message}`,
+        );
       }
 
       // ── 8. Add PR labels ──────────────────────────────────────────────────────
       const severity = (bug as any).severity as string | undefined;
-      const labels = ['bug-intelligence-fix', ...(severity ? [`severity-${severity}`] : [])];
+      const labels = [
+        'bug-intelligence-fix',
+        ...(severity ? [`severity-${severity}`] : []),
+      ];
       try {
-        await this.addPrLabels(repo.installation_id, repo.github_owner, repo.github_repo, prNumber, labels);
+        await this.addPrLabels(
+          repo.installation_id,
+          repo.github_owner,
+          repo.github_repo,
+          prNumber,
+          labels,
+        );
       } catch (err) {
         // Labels are best-effort — don't fail the whole PR for this
-        this.logger.warn(`Could not add labels to PR #${prNumber}: ${(err as Error).message}`);
+        this.logger.warn(
+          `Could not add labels to PR #${prNumber}: ${(err as Error).message}`,
+        );
       }
 
       // ── 9. Persist PR details ─────────────────────────────────────────────────
@@ -196,8 +257,11 @@ export class FixPrWorker implements OnModuleInit, OnModuleDestroy {
       const tenantId = bug.project.tenant_id;
 
       this.sse.broadcast(
-        { event: 'bug:fix_pr_opened', data: { bugId, projectId, prUrl, prNumber } },
-        (client) => client.tenantId === tenantId,
+        {
+          event: 'bug:fix_pr_opened',
+          data: { bugId, projectId, prUrl, prNumber },
+        },
+        { tenantId },
       );
 
       try {
@@ -221,10 +285,14 @@ export class FixPrWorker implements OnModuleInit, OnModuleDestroy {
           ),
         );
       } catch (err) {
-        this.logger.warn(`Could not create PR notifications for bug=${bugId}: ${(err as Error).message}`);
+        this.logger.warn(
+          `Could not create PR notifications for bug=${bugId}: ${(err as Error).message}`,
+        );
       }
 
-      this.logger.log(`PR #${prNumber} opened for bug=${bugId} attempt=${attemptId}: ${prUrl}`);
+      this.logger.log(
+        `PR #${prNumber} opened for bug=${bugId} attempt=${attemptId}: ${prUrl}`,
+      );
     });
   }
 
@@ -240,7 +308,8 @@ export class FixPrWorker implements OnModuleInit, OnModuleDestroy {
       installationId,
       `/repos/${owner}/${repo}/git/ref/heads/${branch}`,
     );
-    if (!res.ok) throw new Error(`GET branch ref [${res.status}]: ${await res.text()}`);
+    if (!res.ok)
+      throw new Error(`GET branch ref [${res.status}]: ${await res.text()}`);
     const data = (await res.json()) as { object: { sha: string } };
     return data.object.sha;
   }
@@ -255,7 +324,10 @@ export class FixPrWorker implements OnModuleInit, OnModuleDestroy {
     const res = await this.github.apiRequest(
       installationId,
       `/repos/${owner}/${repo}/git/refs`,
-      { method: 'POST', body: JSON.stringify({ ref: `refs/heads/${branch}`, sha }) },
+      {
+        method: 'POST',
+        body: JSON.stringify({ ref: `refs/heads/${branch}`, sha }),
+      },
     );
     if (!res.ok) {
       const body = await res.text();
@@ -274,7 +346,8 @@ export class FixPrWorker implements OnModuleInit, OnModuleDestroy {
       installationId,
       `/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(branch)}`,
     );
-    if (!res.ok) throw new Error(`GET file SHA [${res.status}]: ${await res.text()}`);
+    if (!res.ok)
+      throw new Error(`GET file SHA [${res.status}]: ${await res.text()}`);
     const data = (await res.json()) as { sha: string };
     return data.sha;
   }
@@ -290,10 +363,14 @@ export class FixPrWorker implements OnModuleInit, OnModuleDestroy {
       installationId,
       `/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(branch)}`,
     );
-    if (!res.ok) throw new Error(`GET file content [${res.status}]: ${await res.text()}`);
+    if (!res.ok)
+      throw new Error(`GET file content [${res.status}]: ${await res.text()}`);
     const data = (await res.json()) as { content: string; encoding: string };
-    if (data.encoding !== 'base64') throw new Error(`Unexpected encoding: ${data.encoding}`);
-    return Buffer.from(data.content.replace(/\n/g, ''), 'base64').toString('utf-8');
+    if (data.encoding !== 'base64')
+      throw new Error(`Unexpected encoding: ${data.encoding}`);
+    return Buffer.from(data.content.replace(/\n/g, ''), 'base64').toString(
+      'utf-8',
+    );
   }
 
   private async commitFile(
@@ -315,7 +392,8 @@ export class FixPrWorker implements OnModuleInit, OnModuleDestroy {
         body: JSON.stringify({ message, content: encoded, sha, branch }),
       },
     );
-    if (!res.ok) throw new Error(`Commit file [${res.status}]: ${await res.text()}`);
+    if (!res.ok)
+      throw new Error(`Commit file [${res.status}]: ${await res.text()}`);
   }
 
   private async addPrLabels(
@@ -330,7 +408,8 @@ export class FixPrWorker implements OnModuleInit, OnModuleDestroy {
       `/repos/${owner}/${repo}/issues/${prNumber}/labels`,
       { method: 'POST', body: JSON.stringify({ labels }) },
     );
-    if (!res.ok) throw new Error(`Add labels [${res.status}]: ${await res.text()}`);
+    if (!res.ok)
+      throw new Error(`Add labels [${res.status}]: ${await res.text()}`);
   }
 
   private async createPullRequest(
@@ -347,7 +426,8 @@ export class FixPrWorker implements OnModuleInit, OnModuleDestroy {
       `/repos/${owner}/${repo}/pulls`,
       { method: 'POST', body: JSON.stringify({ title, body, head, base }) },
     );
-    if (!res.ok) throw new Error(`Create PR [${res.status}]: ${await res.text()}`);
+    if (!res.ok)
+      throw new Error(`Create PR [${res.status}]: ${await res.text()}`);
     return res.json() as Promise<{ number: number; html_url: string }>;
   }
 
@@ -364,11 +444,19 @@ export class FixPrWorker implements OnModuleInit, OnModuleDestroy {
     if (startLine < 1 || endLine > lines.length) return null;
 
     const slice = lines.slice(startLine - 1, endLine).join('\n');
-    const normalize = (s: string) => s.replace(/\r\n/g, '\n').replace(/[ \t]+$/gm, '').trim();
+    const normalize = (s: string) =>
+      s
+        .replace(/\r\n/g, '\n')
+        .replace(/[ \t]+$/gm, '')
+        .trim();
     if (normalize(slice) !== normalize(originalCode)) return null;
 
     const fixLines = fixedCode.split('\n');
-    return [...lines.slice(0, startLine - 1), ...fixLines, ...lines.slice(endLine)].join('\n');
+    return [
+      ...lines.slice(0, startLine - 1),
+      ...fixLines,
+      ...lines.slice(endLine),
+    ].join('\n');
   }
 
   private buildBranchName(bugId: string, attemptId: string): string {
@@ -376,15 +464,31 @@ export class FixPrWorker implements OnModuleInit, OnModuleDestroy {
     return short.slice(0, MAX_BRANCH_NAME_LEN);
   }
 
-  private buildCommitMessage(errorMessage: string, explanation: string): string {
+  private buildCommitMessage(
+    errorMessage: string,
+    explanation: string,
+  ): string {
     const headline = `fix: ${this.truncate(errorMessage, 60)}`;
     const body = explanation ? `\n\n${explanation}` : '';
     return `${headline}${body}\n\n[autofix]`;
   }
 
   private buildPrBody(
-    bug: { id: string; summary: string | null; root_cause: string | null; fix_suggestion: string | null; error: { message: string } },
-    attempt: { id: string; fix_explanation: string | null; fix_confidence: number | null; target_file: string | null; start_line: number | null; end_line: number | null },
+    bug: {
+      id: string;
+      summary: string | null;
+      root_cause: string | null;
+      fix_suggestion: string | null;
+      error: { message: string };
+    },
+    attempt: {
+      id: string;
+      fix_explanation: string | null;
+      fix_confidence: number | null;
+      target_file: string | null;
+      start_line: number | null;
+      end_line: number | null;
+    },
   ): string {
     return `## Automated Bug Fix
 

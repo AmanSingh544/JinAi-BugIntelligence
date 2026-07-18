@@ -57,14 +57,23 @@ export function flushReplayBuffer(includeExtra = false) {
       } else if (events.length > 0) {
         sendReplayEvents(events);
       }
-      stopReplayRecording();
+      restartRecording();
     }, POST_ERROR_RECORD_MS);
   } else {
     if (events.length > 0) {
       sendReplayEvents(events);
     }
-    stopReplayRecording();
+    restartRecording();
   }
+}
+
+// Restart (not just continue) so rrweb emits a fresh full snapshot — without
+// one, the next flushed segment would be incremental-only and unplayable.
+// Keeps recording armed for the next error instead of going dark until the
+// service worker's next 60s config broadcast.
+function restartRecording() {
+  stopReplayRecording();
+  startReplayRecording();
 }
 
 function sendReplayEvents(events: unknown[]) {

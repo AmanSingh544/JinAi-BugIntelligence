@@ -1,8 +1,14 @@
 import { Injectable } from '@nestjs/common';
-import type { IntegrationProvider, BugReportPayload, JsonValue, TicketResult } from './integration.interface';
+import type {
+  IntegrationProvider,
+  BugReportPayload,
+  JsonValue,
+  TicketResult,
+} from './integration.interface';
 import { externalApiFetch } from '../../../shared/http/external-api-fetch';
 import { readJsonResponse } from '../../../shared/http/read-json-response';
 import { tokenAuth } from '../../../shared/http/auth-helpers';
+import { ProviderError } from './provider-error';
 import { GITHUB_SCHEMA } from './provider.schema';
 
 @Injectable()
@@ -11,14 +17,19 @@ export class GitHubProvider implements IntegrationProvider {
   readonly name = 'GitHub Issues';
   readonly schema = GITHUB_SCHEMA;
 
-  async validateCredentials(config: Record<string, JsonValue>): Promise<boolean> {
+  async validateCredentials(
+    config: Record<string, JsonValue>,
+  ): Promise<boolean> {
     const token = config.token as string;
     if (!token) return false;
 
     try {
       await externalApiFetch(this.id, {
         url: 'https://api.github.com/user',
-        headers: { ...tokenAuth('token', token), Accept: 'application/vnd.github+json' },
+        headers: {
+          ...tokenAuth('token', token),
+          Accept: 'application/vnd.github+json',
+        },
       });
       return true;
     } catch {
@@ -26,10 +37,24 @@ export class GitHubProvider implements IntegrationProvider {
     }
   }
 
-  async createTicket(payload: BugReportPayload, config: Record<string, JsonValue>): Promise<TicketResult> {
+  async createTicket(
+    payload: BugReportPayload,
+    config: Record<string, JsonValue>,
+  ): Promise<TicketResult> {
     const owner = config.owner as string;
     const repo = config.repo as string;
     const token = config.token as string;
+
+    for (const [field, value] of Object.entries({ owner, repo, token })) {
+      if (!value) {
+        // 400 → isPermanent: a missing config field never heals on retry
+        throw new ProviderError({
+          providerId: this.id,
+          message: `Integration config is missing required field "${field}"`,
+          statusCode: 400,
+        });
+      }
+    }
 
     const severityLabels: Record<string, string> = {
       low: 'bug-low',
@@ -72,7 +97,10 @@ export class GitHubProvider implements IntegrationProvider {
       }),
     });
 
-    const data = await readJsonResponse<{ number: number; html_url: string }>(this.id, res);
+    const data = await readJsonResponse<{ number: number; html_url: string }>(
+      this.id,
+      res,
+    );
     return {
       ticketId: String(data.number),
       url: data.html_url,

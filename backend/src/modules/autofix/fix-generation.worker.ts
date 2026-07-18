@@ -1,4 +1,10 @@
-import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Worker, Job } from 'bullmq';
 import OpenAI from 'openai';
@@ -11,6 +17,7 @@ import { MetricsService } from '../../shared/metrics/metrics.service';
 import { FixGenerationJob, FIX_GENERATION_QUEUE } from './fix-generation.queue';
 import { FixPromptService } from './fix-prompt.service';
 import { PatchApplicatorService } from './patch-applicator.service';
+import { FixValidatorService } from './fix-validator.service';
 import { SourceFetcherService } from './source-fetcher.service';
 import { FixPrQueue } from './fix-pr.queue';
 
@@ -34,6 +41,7 @@ export class FixGenerationWorker implements OnModuleInit, OnModuleDestroy {
     private readonly metrics: MetricsService,
     private readonly promptService: FixPromptService,
     private readonly patchApplicator: PatchApplicatorService,
+    private readonly fixValidator: FixValidatorService,
     private readonly sourceFetcher: SourceFetcherService,
     private readonly prQueue: FixPrQueue,
   ) {
@@ -45,10 +53,21 @@ export class FixGenerationWorker implements OnModuleInit, OnModuleDestroy {
         'X-Title': 'Bug Intelligence Autofix',
       },
     });
-    const modelsEnv = this.config.get<string>('AI_MODELS') ?? this.config.get<string>('AI_MODEL') ?? 'gpt-4o-mini';
-    this.models = modelsEnv.split(',').map((m) => m.trim()).filter(Boolean);
-    this.maxAttempts = parseInt(this.config.get<string>('AUTOFIX_MAX_ATTEMPTS') ?? '3', 10);
-    this.minConfidence = parseFloat(this.config.get<string>('AUTOFIX_FIX_CONFIDENCE_MIN') ?? '0.75');
+    const modelsEnv =
+      this.config.get<string>('AI_MODELS') ??
+      this.config.get<string>('AI_MODEL') ??
+      'gpt-4o-mini';
+    this.models = modelsEnv
+      .split(',')
+      .map((m) => m.trim())
+      .filter(Boolean);
+    this.maxAttempts = parseInt(
+      this.config.get<string>('AUTOFIX_MAX_ATTEMPTS') ?? '3',
+      10,
+    );
+    this.minConfidence = parseFloat(
+      this.config.get<string>('AUTOFIX_FIX_CONFIDENCE_MIN') ?? '0.75',
+    );
   }
 
   onModuleInit() {
@@ -68,15 +87,20 @@ export class FixGenerationWorker implements OnModuleInit, OnModuleDestroy {
 
   private async process(job: Job<FixGenerationJob>) {
     return this.metrics.wrapJob('fix-generation', async () => {
-      const { bugId, projectId, errorId, requireApproval } = job.data;
+      const { bugId, projectId, requireApproval } = job.data;
       this.logger.log(`Fix generation started for bug=${bugId}`);
 
       // ── 1. Load bug + validate it's still fix-worthy ─────────────────────
       const bug = await this.prisma.bug.findUnique({
         where: { id: bugId, project_id: projectId },
-        include: { error: { include: { release: { include: { sourcemaps: true } } } } },
+        include: {
+          error: { include: { release: { include: { sourcemaps: true } } } },
+        },
       });
-      if (!bug) return this.logger.warn(`Bug ${bugId} not found in project=${projectId} — skipping`);
+      if (!bug)
+        return this.logger.warn(
+          `Bug ${bugId} not found in project=${projectId} — skipping`,
+        );
       if (bug.status === 'resolved' || bug.status === 'ignored') {
         return this.logger.log(`Bug ${bugId} is ${bug.status} — skipping fix`);
       }
@@ -86,32 +110,54 @@ export class FixGenerationWorker implements OnModuleInit, OnModuleDestroy {
         where: { project_id: projectId },
       });
       if (!repo) {
-        return this.logger.warn(`No repository connected for project=${projectId}`);
+        return this.logger.warn(
+          `No repository connected for project=${projectId}`,
+        );
       }
 
       // ── 3. Severity + confidence gates ────────────────────────────────────
       const minSevIdx = SEVERITY_ORDER.indexOf(repo.min_severity);
       const bugSevIdx = SEVERITY_ORDER.indexOf(bug.severity ?? 'low');
       if (bugSevIdx < minSevIdx) {
-        this.logger.log(`Bug ${bugId} severity=${bug.severity} below threshold=${repo.min_severity} — skipping`);
+        this.logger.log(
+          `Bug ${bugId} severity=${bug.severity} below threshold=${repo.min_severity} — skipping`,
+        );
         return;
       }
-      if (bug.ai_confidence !== null && bug.ai_confidence < repo.fix_confidence_min) {
-        this.logger.log(`Bug ${bugId} confidence=${bug.ai_confidence} below threshold=${repo.fix_confidence_min} — skipping`);
+      if (
+        bug.ai_confidence !== null &&
+        bug.ai_confidence < repo.fix_confidence_min
+      ) {
+        this.logger.log(
+          `Bug ${bugId} confidence=${bug.ai_confidence} below threshold=${repo.fix_confidence_min} — skipping`,
+        );
         return;
       }
 
       // ── 4. Check attempt limit ────────────────────────────────────────────
-      const attemptCount = await this.prisma.bugFixAttempt.count({ where: { bug_id: bugId } });
+      const attemptCount = await this.prisma.bugFixAttempt.count({
+        where: { bug_id: bugId },
+      });
       if (attemptCount >= this.maxAttempts) {
-        this.logger.warn(`Bug ${bugId} reached max fix attempts (${this.maxAttempts})`);
-        await this.prisma.bug.update({ where: { id: bugId }, data: { fix_status: 'fix_failed' } });
+        this.logger.warn(
+          `Bug ${bugId} reached max fix attempts (${this.maxAttempts})`,
+        );
+        await this.prisma.bug.update({
+          where: { id: bugId },
+          data: { fix_status: 'fix_failed' },
+        });
         return;
       }
 
       // ── 5. Acquire Redis lock (prevents concurrent attempts) ──────────────
       const lockKey = `${AUTOFIX_LOCK_PREFIX}${bugId}`;
-      const locked = await this.redis.set(lockKey, '1', 'EX', AUTOFIX_LOCK_TTL, 'NX');
+      const locked = await this.redis.set(
+        lockKey,
+        '1',
+        'EX',
+        AUTOFIX_LOCK_TTL,
+        'NX',
+      );
       if (!locked) {
         this.logger.debug(`Lock held for bug=${bugId} — skipping duplicate`);
         return;
@@ -129,17 +175,31 @@ export class FixGenerationWorker implements OnModuleInit, OnModuleDestroy {
 
       try {
         // ── 7. Resolve source file from stack trace ───────────────────────
-        const { filePath, errorLine } = await this.resolveSourceFrame(bug.error);
+        const { filePath, errorLine } = await this.resolveSourceFrame(
+          bug.error,
+        );
         if (!filePath || errorLine === null) {
-          return await this.failAttempt(attempt.id, bugId, 'Could not resolve source file from stack trace');
+          return await this.failAttempt(
+            attempt.id,
+            bugId,
+            'Could not resolve source file from stack trace',
+          );
         }
 
         // ── 8. Fetch source file from GitHub ──────────────────────────────
         let sourceCtx;
         try {
-          sourceCtx = await this.sourceFetcher.fetchSourceForFrame(filePath, errorLine, repo);
+          sourceCtx = await this.sourceFetcher.fetchSourceForFrame(
+            filePath,
+            errorLine,
+            repo,
+          );
         } catch (err) {
-          return await this.failAttempt(attempt.id, bugId, `Source fetch failed: ${(err as Error).message}`);
+          return await this.failAttempt(
+            attempt.id,
+            bugId,
+            `Source fetch failed: ${(err as Error).message}`,
+          );
         }
 
         // ── 9. Build prompt + call AI ─────────────────────────────────────
@@ -156,27 +216,40 @@ export class FixGenerationWorker implements OnModuleInit, OnModuleDestroy {
           requiresApproval: requireApproval,
         });
 
-        const aiText = await this.callWithFallback(this.promptService.systemPrompt, userPrompt);
+        const aiText = await this.callWithFallback(
+          this.promptService.systemPrompt,
+          userPrompt,
+        );
         if (!aiText) {
-          return await this.failAttempt(attempt.id, bugId, 'All AI models exhausted');
+          return await this.failAttempt(
+            attempt.id,
+            bugId,
+            'All AI models exhausted',
+          );
         }
 
         // ── 10. Parse AI response ─────────────────────────────────────────
         const fixResult = this.promptService.parseAiResponse(aiText);
         if (!fixResult) {
-          return await this.failAttempt(attempt.id, bugId, 'AI response could not be parsed as valid fix JSON');
+          return await this.failAttempt(
+            attempt.id,
+            bugId,
+            'AI response could not be parsed as valid fix JSON',
+          );
         }
 
         if (fixResult.confidence < this.minConfidence) {
           return await this.failAttempt(
-            attempt.id, bugId,
+            attempt.id,
+            bugId,
             `AI confidence ${fixResult.confidence} below threshold ${this.minConfidence}`,
           );
         }
 
         if (fixResult.requiresMultipleFiles) {
           return await this.failAttempt(
-            attempt.id, bugId,
+            attempt.id,
+            bugId,
             'Fix requires multiple files — not supported in Phase 1 (single-file only)',
           );
         }
@@ -197,11 +270,28 @@ export class FixGenerationWorker implements OnModuleInit, OnModuleDestroy {
         });
 
         // ── 12. Apply patch (exact-match safety check) ────────────────────
-        const applyResult = this.patchApplicator.apply(sourceCtx.file.content, fixResult);
+        const applyResult = this.patchApplicator.apply(
+          sourceCtx.file.content,
+          fixResult,
+        );
         if (!applyResult.success) {
           return await this.failAttempt(
-            attempt.id, bugId,
+            attempt.id,
+            bugId,
             `Patch apply failed (${applyResult.reason}): ${applyResult.detail}`,
+          );
+        }
+
+        // ── 12b. Syntax-check the patched file before it becomes a PR ─────
+        const validation = this.fixValidator.validate(
+          fixResult.file,
+          applyResult.newContent,
+        );
+        if (!validation.ok) {
+          return await this.failAttempt(
+            attempt.id,
+            bugId,
+            `Patched file failed syntax validation: ${validation.errors.join('; ')}`,
           );
         }
 
@@ -217,14 +307,18 @@ export class FixGenerationWorker implements OnModuleInit, OnModuleDestroy {
 
         this.logger.log(
           `Fix validated for bug=${bugId} attempt=${attempt.id} ` +
-          `file=${fixResult.file} lines=${fixResult.startLine}-${fixResult.endLine} ` +
-          `confidence=${fixResult.confidence}`,
+            `file=${fixResult.file} lines=${fixResult.startLine}-${fixResult.endLine} ` +
+            `confidence=${fixResult.confidence}`,
         );
 
         // Enqueue PR creation
         await this.prQueue.add({ attemptId: attempt.id, bugId, projectId });
       } catch (err) {
-        await this.failAttempt(attempt.id, bugId, `Unexpected error: ${(err as Error).message}`);
+        await this.failAttempt(
+          attempt.id,
+          bugId,
+          `Unexpected error: ${(err as Error).message}`,
+        );
         throw err; // Let BullMQ retry
       } finally {
         await this.redis.del(lockKey);
@@ -234,20 +328,23 @@ export class FixGenerationWorker implements OnModuleInit, OnModuleDestroy {
 
   // ── Resolve the primary source file path + line from the unminified stack ──
 
-  private async resolveSourceFrame(
-    error: {
-      stack_unminified: string | null;
-      stack: string | null;
-      release: {
-        sourcemaps: { sourcemap_path: string; minified_filename: string; sourcemap_parsed: boolean }[];
-      } | null;
-    },
-  ): Promise<{ filePath: string | null; errorLine: number | null }> {
+  private async resolveSourceFrame(error: {
+    stack_unminified: string | null;
+    stack: string | null;
+    release: {
+      sourcemaps: {
+        sourcemap_path: string;
+        minified_filename: string;
+        sourcemap_parsed: boolean;
+      }[];
+    } | null;
+  }): Promise<{ filePath: string | null; errorLine: number | null }> {
     const stack = error.stack_unminified ?? error.stack ?? '';
     if (!stack) return { filePath: null, errorLine: null };
 
     // Parse first meaningful frame from the unminified stack
-    const frameRegex = /at\s+(?:\S+\s+)?\(?([\w./\-@:]+\.(?:ts|tsx|js|jsx|vue|svelte)):(\d+):\d+\)?/;
+    const frameRegex =
+      /at\s+(?:\S+\s+)?\(?([\w./\-@:]+\.(?:ts|tsx|js|jsx|vue|svelte)):(\d+):\d+\)?/;
     const match = stack.match(frameRegex);
     if (match?.[1] && match?.[2]) {
       return { filePath: match[1], errorLine: parseInt(match[2], 10) };
@@ -255,7 +352,10 @@ export class FixGenerationWorker implements OnModuleInit, OnModuleDestroy {
 
     // Fallback: try to resolve from minified stack + sourcemap
     if (error.release?.sourcemaps?.length) {
-      const parsed = await this.resolveFromSourcemap(error.stack ?? '', error.release.sourcemaps);
+      const parsed = await this.resolveFromSourcemap(
+        error.stack ?? '',
+        error.release.sourcemaps,
+      );
       if (parsed) return parsed;
     }
 
@@ -264,9 +364,15 @@ export class FixGenerationWorker implements OnModuleInit, OnModuleDestroy {
 
   private async resolveFromSourcemap(
     minifiedStack: string,
-    sourcemaps: { sourcemap_path: string; minified_filename: string; sourcemap_parsed: boolean }[],
+    sourcemaps: {
+      sourcemap_path: string;
+      minified_filename: string;
+      sourcemap_parsed: boolean;
+    }[],
   ): Promise<{ filePath: string; errorLine: number } | null> {
-    const frameMatch = minifiedStack.match(/at\s+(?:\S+\s+)?\(?([^:]+):(\d+):(\d+)\)?/);
+    const frameMatch = minifiedStack.match(
+      /at\s+(?:\S+\s+)?\(?([^:]+):(\d+):(\d+)\)?/,
+    );
     if (!frameMatch) return null;
 
     const [, rawFile, lineStr, colStr] = frameMatch;
@@ -285,7 +391,9 @@ export class FixGenerationWorker implements OnModuleInit, OnModuleDestroy {
       });
       consumer.destroy();
       if (pos.source && pos.line) {
-        const cleanPath = pos.source.replace(/^webpack:\/\/\//, '').replace(/^\.\//, '');
+        const cleanPath = pos.source
+          .replace(/^webpack:\/\/\//, '')
+          .replace(/^\.\//, '');
         return { filePath: cleanPath, errorLine: pos.line };
       }
     } catch {
@@ -296,7 +404,10 @@ export class FixGenerationWorker implements OnModuleInit, OnModuleDestroy {
 
   // ── LLM call with model fallback chain ────────────────────────────────────
 
-  private async callWithFallback(systemPrompt: string, userPrompt: string): Promise<string | null> {
+  private async callWithFallback(
+    systemPrompt: string,
+    userPrompt: string,
+  ): Promise<string | null> {
     for (const model of this.models) {
       try {
         const response = await this.ai.chat.completions.create({
@@ -315,7 +426,9 @@ export class FixGenerationWorker implements OnModuleInit, OnModuleDestroy {
         }
       } catch (err) {
         const e = err as Error & { status?: number };
-        this.logger.warn(`Fix model ${model} failed [${e.status ?? '?'}]: ${e.message} — trying next`);
+        this.logger.warn(
+          `Fix model ${model} failed [${e.status ?? '?'}]: ${e.message} — trying next`,
+        );
       }
     }
     return null;
@@ -335,9 +448,14 @@ export class FixGenerationWorker implements OnModuleInit, OnModuleDestroy {
       where: { bug_id: bugId, status: { notIn: ['failed', 'cancelled'] } },
     });
     if (remaining === 0) {
-      const total = await this.prisma.bugFixAttempt.count({ where: { bug_id: bugId } });
+      const total = await this.prisma.bugFixAttempt.count({
+        where: { bug_id: bugId },
+      });
       if (total >= this.maxAttempts) {
-        await this.prisma.bug.update({ where: { id: bugId }, data: { fix_status: 'fix_failed' } });
+        await this.prisma.bug.update({
+          where: { id: bugId },
+          data: { fix_status: 'fix_failed' },
+        });
       }
     }
   }

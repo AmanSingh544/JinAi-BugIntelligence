@@ -8,6 +8,7 @@ import { FixGenerationQueue } from './fix-generation.queue';
 import { FixGenerationWorker } from './fix-generation.worker';
 import { FixPromptService } from './fix-prompt.service';
 import { PatchApplicatorService } from './patch-applicator.service';
+import { FixValidatorService } from './fix-validator.service';
 import { FixPrQueue } from './fix-pr.queue';
 import { FixPrWorker } from './fix-pr.worker';
 import { FixPrMonitorService } from './fix-pr-monitor.service';
@@ -22,6 +23,7 @@ import type Redis from 'ioredis';
     SourceFetcherService,
     FixPromptService,
     PatchApplicatorService,
+    FixValidatorService,
     FixGenerationWorker,
     FixPrWorker,
     FixPrMonitorService,

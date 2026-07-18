@@ -62,6 +62,8 @@ export const api = {
       request<{ message: string }>('/auth/resend-verification', { method: 'POST' }),
     logout: () =>
       request<{ message: string }>('/auth/logout', { method: 'POST' }),
+    refresh: () =>
+      request<{ token: string }>('/auth/refresh', { method: 'POST' }),
   },
 
   projects: {
@@ -114,6 +116,15 @@ export const api = {
     },
     get: (projectId: string, bugId: string) =>
       request<RawBugDetail>(`/projects/${projectId}/bugs/${bugId}`).then(mapBugDetail),
+    update: (
+      projectId: string,
+      bugId: string,
+      fields: { summary?: string; rootCause?: string; fixSuggestion?: string; stepsToReproduce?: string[] },
+    ) =>
+      request<RawBug>(`/projects/${projectId}/bugs/${bugId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(fields),
+      }).then(mapBug),
     updateStatus: (projectId: string, bugId: string, status: string) =>
       request<RawBug>(`/projects/${projectId}/bugs/${bugId}/status`, {
         method: 'PATCH',

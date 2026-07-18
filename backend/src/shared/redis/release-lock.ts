@@ -30,5 +30,10 @@ export async function releaseLock(
   key: string,
   value: string,
 ): Promise<void> {
-  await redis.eval(UNLOCK_LUA, 1, key, value);
+  try {
+    await redis.eval(UNLOCK_LUA, 1, key, value);
+  } catch {
+    // Swallowed by contract: the TTL cleans up the lock if release fails,
+    // and a cleanup failure must not invalidate the caller's completed work.
+  }
 }

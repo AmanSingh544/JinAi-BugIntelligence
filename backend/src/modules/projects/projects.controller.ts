@@ -1,4 +1,13 @@
-import { Body, Controller, ForbiddenException, Get, Param, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  ForbiddenException,
+  Get,
+  Param,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../shared/guards/jwt-auth.guard';
 import { TenantAuthGuard } from '../auth/tenant-auth.guard';
@@ -37,10 +46,12 @@ export class ProjectsController {
     @Body() dto: CreateProjectDto,
     @CurrentTenant() tenant?: TenantContext,
   ) {
-    const tenantId = tenant?.tenantId ?? await this.resolveTenantId(userId);
+    const tenantId = tenant?.tenantId ?? (await this.resolveTenantId(userId));
     const canManage = await this.authz.canManageTenant(userId, tenantId);
     if (!canManage) {
-      throw new ForbiddenException('You do not have permission to create projects in this tenant');
+      throw new ForbiddenException(
+        'You do not have permission to create projects in this tenant',
+      );
     }
     return this.projects.create(tenantId, dto);
   }
@@ -50,17 +61,37 @@ export class ProjectsController {
     @CurrentUser('sub') userId: string,
     @CurrentTenant() tenant?: TenantContext,
   ) {
-    const tenantId = tenant?.tenantId ?? await this.resolveTenantId(userId);
+    const tenantId = tenant?.tenantId ?? (await this.resolveTenantId(userId));
     const canView = await this.authz.canManageTenant(userId, tenantId);
     if (!canView) {
-      throw new ForbiddenException('You do not have permission to view projects in this tenant');
+      throw new ForbiddenException(
+        'You do not have permission to view projects in this tenant',
+      );
     }
     return this.projects.findAll(tenantId);
   }
 
   @Get(':id')
-  async findOne(@Param('id') id: string, @CurrentTenant() tenant: TenantContext) {
+  async findOne(
+    @Param('id') id: string,
+    @CurrentTenant() tenant: TenantContext,
+  ) {
     return this.projects.findOne(tenant.tenantId, id);
+  }
+
+  @Delete(':id')
+  async remove(
+    @CurrentUser('sub') userId: string,
+    @Param('id') id: string,
+    @CurrentTenant() tenant: TenantContext,
+  ) {
+    const canManage = await this.authz.canManageProject(userId, id);
+    if (!canManage) {
+      throw new ForbiddenException(
+        'You do not have permission to delete this project',
+      );
+    }
+    return this.projects.remove(tenant.tenantId, id);
   }
 
   @Post(':id/rotate-key')
@@ -71,7 +102,9 @@ export class ProjectsController {
   ) {
     const canManage = await this.authz.canManageProject(userId, id);
     if (!canManage) {
-      throw new ForbiddenException('You do not have permission to rotate the API key for this project');
+      throw new ForbiddenException(
+        'You do not have permission to rotate the API key for this project',
+      );
     }
     return this.projects.rotateApiKey(tenant.tenantId, id);
   }

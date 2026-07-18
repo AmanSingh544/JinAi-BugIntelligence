@@ -1,3 +1,12 @@
+> ⚠️ **HISTORICAL SNAPSHOT (2026-05-15) — superseded.** Most gaps listed under "STILL MISSING"
+> below have since been closed: dashboard aggregation endpoints, SSE real-time updates, audit
+> wiring, pagination, charts/Overview page, bulk operations, search, password reset/email
+> verification, DLQ endpoints, real e2e tests, extension input tracking, and `sanitize.ts`
+> wiring are all implemented. See `MASTER_PLAN.md` (progress tracker updated 2026-07-18)
+> for current status. Items genuinely still open: fingerprint stability metrics, cold
+> storage/partitioning, Jira/GitHub provider hardening, autofix validation sandbox,
+> deeper test coverage.
+
 Here's a clear breakdown of what's **fully implemented and functioning** vs. **still missing or incomplete** across the platform.
 
 ---

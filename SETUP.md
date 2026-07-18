@@ -13,9 +13,9 @@
 
 ## Step 1 — Start Infrastructure
 
-From the project root (`Extension--`):
+From the project root (`JinnAi`):
 
-```powershell
+```bash
 docker compose up -d
 ```
 
@@ -32,9 +32,9 @@ Starts:
 
 ## Step 2 — Configure Backend (one-time)
 
-```powershell
+```bash
 cd backend
-copy .env.example .env
+cp .env.example .env
 ```
 
 Open `backend/.env` and set **at minimum**:
@@ -59,7 +59,7 @@ Everything else (DATABASE_URL, REDIS_URL, PORT) is already set correctly in `.en
 
 ## Step 3 — Install Dependencies & Run Migrations (one-time)
 
-```powershell
+```bash
 # Still in backend/
 npm install
 npm run db:generate
@@ -70,7 +70,7 @@ npm run db:migrate
 
 ## Step 4 — Start the Backend
 
-```powershell
+```bash
 # In backend/
 npm run start:dev
 ```
@@ -84,7 +84,7 @@ npm run start:dev
 
 Open a new terminal:
 
-```powershell
+```bash
 cd dashboard
 npm install
 npm run dev
@@ -104,7 +104,7 @@ Dashboard: http://localhost:5173
 
 ## Step 7 — Build & Load the Chrome Extension (one-time)
 
-```powershell
+```bash
 cd extension
 npm install
 npm run build
@@ -113,7 +113,7 @@ npm run build
 In Chrome:
 1. Go to `chrome://extensions`
 2. Enable **Developer mode** (top-right toggle)
-3. Click **Load unpacked** → select the `extension\dist\` folder
+3. Click **Load unpacked** → select the `extension/dist/` folder
 4. Click the extension icon in the toolbar
 5. Paste your project API key (`bi_live_...`) → click **Start Capture**
 
@@ -166,20 +166,21 @@ The CLI tool lives at [packages/sourcemap-upload/](packages/sourcemap-upload/) i
 
 **One-time install** (run from the root of the project being tested, not from this repo):
 
-```powershell
+```bash
 # Install the CLI as a dev dependency, pointing at the local package
-npm install -D "c:\Users\aman.singh\source\Workspace\Meridian\3sc-platform\Extension--\packages\sourcemap-upload"
+# (replace <path-to-this-repo> with wherever you cloned JinnAi)
+npm install -D "<path-to-this-repo>/packages/sourcemap-upload"
 ```
 
 This adds `bi-upload-sourcemaps` as a local binary to the project being tested.
 
 **Run it after your build:**
 
-```powershell
+```bash
 # Set your credentials (from the dashboard — Project page)
-$env:BUG_INTELLIGENCE_PROJECT_ID = "your-project-uuid"
-$env:BUG_INTELLIGENCE_API_KEY    = "bi_live_your_key_here"
-$env:BUG_INTELLIGENCE_API_URL    = "http://localhost:4000/api/v1"
+export BUG_INTELLIGENCE_PROJECT_ID="your-project-uuid"
+export BUG_INTELLIGENCE_API_KEY="bi_live_your_key_here"
+export BUG_INTELLIGENCE_API_URL="http://localhost:4000/api/v1"
 
 # Then upload — pass the folder containing your .map files
 npx bi-upload-sourcemaps dist
@@ -214,7 +215,7 @@ The CLI automatically:
 
 **Dry-run to preview before uploading:**
 
-```powershell
+```bash
 npx bi-upload-sourcemaps --dry-run dist
 ```
 
@@ -224,29 +225,26 @@ npx bi-upload-sourcemaps --dry-run dist
 
 If you prefer curl over the CLI:
 
-```powershell
-$PROJECT_ID = "your-project-uuid"
-$API_KEY    = "bi_live_your_key_here"
-$VERSION    = "1.0.0"
+```bash
+PROJECT_ID="your-project-uuid"
+API_KEY="bi_live_your_key_here"
+VERSION="1.0.0"
 
 # Step 1 — create a release record
-$response = curl -s -X POST "http://localhost:4000/api/v1/projects/$PROJECT_ID/releases" `
-  -H "X-API-Key: $API_KEY" `
-  -H "Content-Type: application/json" `
-  -d "{`"version`": `"$VERSION`"}"
-
-# Save the release ID from the response JSON
-$RELEASE_ID = ($response | ConvertFrom-Json).id
+RELEASE_ID=$(curl -s -X POST "http://localhost:4000/api/v1/projects/$PROJECT_ID/releases" \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{\"version\": \"$VERSION\"}" | jq -r '.id')
 
 # Step 2a — upload a single .map file
-curl -X POST "http://localhost:4000/api/v1/projects/$PROJECT_ID/releases/$RELEASE_ID/sourcemaps" `
-  -H "X-API-Key: $API_KEY" `
-  -F "sourcemap=@dist\assets\index.js.map"
+curl -X POST "http://localhost:4000/api/v1/projects/$PROJECT_ID/releases/$RELEASE_ID/sourcemaps" \
+  -H "X-API-Key: $API_KEY" \
+  -F "sourcemap=@dist/assets/index.js.map"
 
 # Step 2b — OR upload a ZIP of all .map files at once (recommended)
-Compress-Archive -Path dist\* -DestinationPath sourcemaps.zip
-curl -X POST "http://localhost:4000/api/v1/projects/$PROJECT_ID/releases/$RELEASE_ID/sourcemaps/batch" `
-  -H "X-API-Key: $API_KEY" `
+zip -r sourcemaps.zip dist
+curl -X POST "http://localhost:4000/api/v1/projects/$PROJECT_ID/releases/$RELEASE_ID/sourcemaps/batch" \
+  -H "X-API-Key: $API_KEY" \
   -F "sourcemaps=@sourcemaps.zip"
 ```
 
@@ -265,9 +263,9 @@ Open the **Releases** tab in the dashboard for your project. Each release is exp
 
 Or via API:
 
-```powershell
+```bash
 # Requires a dashboard JWT (Bearer token from login)
-curl "http://localhost:4000/api/v1/projects/$PROJECT_ID/releases/$RELEASE_ID/sourcemaps" `
+curl "http://localhost:4000/api/v1/projects/$PROJECT_ID/releases/$RELEASE_ID/sourcemaps" \
   -H "Authorization: Bearer YOUR_JWT_TOKEN"
 ```
 
@@ -349,13 +347,13 @@ Once published, any project can install with a single `npm install -D` without n
 
 Check you are logged in:
 
-```powershell
+```bash
 npm whoami
 ```
 
 If not logged in:
 
-```powershell
+```bash
 npm login
 # Enter your npm username, password, and email when prompted
 # If you have 2FA enabled, enter the OTP too
@@ -381,8 +379,8 @@ Use semantic versioning:
 
 Or use the npm version command (auto-bumps and creates a git tag):
 
-```powershell
-cd packages\sourcemap-upload
+```bash
+cd packages/sourcemap-upload
 npm version patch    # 1.0.0 → 1.0.1
 npm version minor    # 1.0.0 → 1.1.0
 npm version major    # 1.0.0 → 2.0.0
@@ -392,8 +390,8 @@ npm version major    # 1.0.0 → 2.0.0
 
 ### 9c — Publish to npm
 
-```powershell
-cd packages\sourcemap-upload
+```bash
+cd packages/sourcemap-upload
 
 # Scoped packages (@org/name) require --access public for free accounts
 npm publish --access public
@@ -409,7 +407,7 @@ npm notice version: 1.0.0
 
 Verify it is live:
 
-```powershell
+```bash
 npm info @bug-intelligence/sourcemap-upload
 ```
 
@@ -421,7 +419,7 @@ Or open: https://www.npmjs.com/package/@bug-intelligence/sourcemap-upload
 
 Once published, anyone can install it without needing this repo at all:
 
-```powershell
+```bash
 # In the root of the project being tested
 npm install -D @bug-intelligence/sourcemap-upload
 ```
@@ -430,7 +428,7 @@ This is the only install command they ever need. It downloads from the public np
 
 Verify the CLI binary is available:
 
-```powershell
+```bash
 npx bi-upload-sourcemaps --help
 ```
 
@@ -440,11 +438,11 @@ npx bi-upload-sourcemaps --help
 
 Get these two values from the dashboard (Project page):
 
-```powershell
-# Set for the current terminal session (Windows)
-$env:BUG_INTELLIGENCE_PROJECT_ID = "your-project-uuid"
-$env:BUG_INTELLIGENCE_API_KEY    = "bi_live_your_key_here"
-$env:BUG_INTELLIGENCE_API_URL    = "http://localhost:4000/api/v1"   # or your deployed backend URL
+```bash
+# Set for the current terminal session
+export BUG_INTELLIGENCE_PROJECT_ID="your-project-uuid"
+export BUG_INTELLIGENCE_API_KEY="bi_live_your_key_here"
+export BUG_INTELLIGENCE_API_URL="http://localhost:4000/api/v1"   # or your deployed backend URL
 ```
 
 Or add them to a `.env` file if your project uses `dotenv` in its scripts (never commit `.env` to git).
@@ -469,7 +467,7 @@ From now on every `npm run build` automatically creates a release and uploads al
 
 **Test it with a dry run first:**
 
-```powershell
+```bash
 npm run build -- --dry-run
 # or directly:
 npx bi-upload-sourcemaps --dry-run dist
@@ -589,8 +587,8 @@ build_command = "npm run build && npx @bug-intelligence/sourcemap-upload dist"
 
 When you fix bugs or add flags to the CLI, re-publish:
 
-```powershell
-cd packages\sourcemap-upload
+```bash
+cd packages/sourcemap-upload
 
 # Bump version
 npm version patch
@@ -607,7 +605,7 @@ Projects using `@bug-intelligence/sourcemap-upload` in their `package.json` with
 
 Open **3 terminals**:
 
-```powershell
+```bash
 # Terminal 1 — infrastructure (skip if already running)
 docker compose up -d
 
@@ -618,7 +616,7 @@ cd backend && npm run start:dev
 cd dashboard && npm run dev
 ```
 
-The Chrome extension runs from the already-built `extension\dist\` and does not need to be restarted.
+The Chrome extension runs from the already-built `extension/dist/` and does not need to be restarted.
 
 ---
 
@@ -658,34 +656,23 @@ The Chrome extension runs from the already-built `extension\dist\` and does not 
 → Check the Releases tab — if the sourcemap status shows "Failed", re-upload. Also confirm the `version` you passed to `create release` matches the `release` field your extension sends (set via the extension popup or the `VITE_RELEASE` env var).
 
 **Prometheus target is DOWN**
-→ Visit http://localhost:4000/metrics — if it errors, the backend metrics endpoint is not running. Restart the backend.
+→ Visit http://localhost:4000/api/v1/metrics — if it errors, the backend metrics endpoint is not running. Restart the backend.
 
 **Extension not capturing — popup shows "Inactive"**
 → Make sure you clicked **Start Capture** in the popup and that the API key is correctly pasted (format: `bi_live_` followed by 64 hex characters).
 
+---
 
+## Quick Reference — upload sourcemaps from any app you're testing
 
-## --------------------------------####-------------------------------------------
-###### Run on local to test uplaod source map file
-## — build internal-console + upload sourcemaps
+```bash
+# In the root of the app being tested, after enabling sourcemaps in its build config:
+export BUG_INTELLIGENCE_PROJECT_ID="<your-project-uuid>"
+export BUG_INTELLIGENCE_API_KEY="<bi_live_...>"
+export BUG_INTELLIGENCE_API_URL="http://localhost:4000/api/v1"
 
-
-# Build the internal-console app
-cd C:\Users\aman.singh\source\Workspace\Meridian\3sc-platform\frontend\apps\internal-console
 npm run build
-
-# Upload sourcemaps to bug intelligence
-bi-upload-sourcemaps `
-  --project-id <UUID> `
-  --api-key <bi_live_...> `
-  --api-url http://localhost:4000/api/v1 `
-  dist
-
-## 
-
-### -------------- OR  Run in the repos u want to upload the source files ----------------
-export BUG_INTELLIGENCE_PROJECT_ID=563a5b0f-8fee-4816-9084-0232---dummy
-export BUG_INTELLIGENCE_API_KEY=bi_live_59be82250a161ac80630876127e1a7c7980449ae8ea8a--dummy
-npm run build:console
+npx bi-upload-sourcemaps dist   # or build/, out/, .next/ — wherever .map files land
+```
 
 ## --------------------------------#####-------------------------------------------

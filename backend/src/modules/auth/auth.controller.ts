@@ -1,4 +1,15 @@
-import { Body, Controller, Get, Post, UseGuards, Req, Res, HttpCode, HttpStatus, Headers } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Post,
+  UseGuards,
+  Req,
+  Res,
+  HttpCode,
+  HttpStatus,
+  Headers,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 import { AuthGuard } from '@nestjs/passport';
@@ -41,6 +52,17 @@ export class AuthController {
     return this.auth.logout(token);
   }
 
+  @Post('refresh')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @HttpCode(HttpStatus.OK)
+  refresh(@CurrentUser() user: { sub: string; email: string }) {
+    // Re-issues a fresh access token while the current one is still valid.
+    // The old token expires naturally (≤15m); it is not blacklisted so
+    // in-flight requests carrying it don't race a revocation.
+    return { token: this.auth.sign(user.sub, user.email) };
+  }
+
   @Get('me')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
@@ -74,10 +96,11 @@ export class AuthController {
   @Post('forgot-password')
   @HttpCode(HttpStatus.OK)
   async forgotPassword(@Body() dto: ForgotPasswordDto, @Req() req: Request) {
-    const ip = req.headers['x-forwarded-for']?.toString().split(',')[0].trim()
-      ?? req.ip
-      ?? req.socket?.remoteAddress
-      ?? 'unknown';
+    const ip =
+      req.headers['x-forwarded-for']?.toString().split(',')[0].trim() ??
+      req.ip ??
+      req.socket?.remoteAddress ??
+      'unknown';
     await this.rateLimit.checkForgotPassword(dto.email, ip);
     return this.auth.forgotPassword(dto.email);
   }
@@ -106,7 +129,7 @@ export class AuthController {
 
   @Get('google/callback')
   @UseGuards(AuthGuard('google'))
-  async googleAuthCallback(@Req() req: Request, @Res() res: Response) {
+  googleAuthCallback(@Req() req: Request, @Res() res: Response) {
     const user = req.user as { id: string; email: string };
     const token = this.auth.sign(user.id, user.email);
     const dashboardUrl = process.env.DASHBOARD_URL ?? 'http://localhost:5173';
@@ -119,7 +142,7 @@ export class AuthController {
 
   @Get('github/callback')
   @UseGuards(AuthGuard('github'))
-  async githubAuthCallback(@Req() req: Request, @Res() res: Response) {
+  githubAuthCallback(@Req() req: Request, @Res() res: Response) {
     const user = req.user as { id: string; email: string };
     const token = this.auth.sign(user.id, user.email);
     const dashboardUrl = process.env.DASHBOARD_URL ?? 'http://localhost:5173';

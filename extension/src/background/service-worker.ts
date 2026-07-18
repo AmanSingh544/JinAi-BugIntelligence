@@ -10,14 +10,10 @@ import { sanitizePayload } from '../shared/sanitize';
 
 // ── Offscreen document for screenshots ────────────────────────────────────────
 
-let offscreenDocumentPath: string | null = null;
-
 async function setupOffscreenDocument(path: string): Promise<void> {
-  if (offscreenDocumentPath === path) return;
-  if (offscreenDocumentPath) {
-    await chrome.offscreen.closeDocument();
-  }
-  offscreenDocumentPath = path;
+  // hasDocument survives SW restarts — a module-level flag does not, and
+  // createDocument throws if a document already exists from a previous SW life
+  if (await chrome.offscreen.hasDocument()) return;
   await chrome.offscreen.createDocument({
     url: chrome.runtime.getURL(path),
     reasons: ['TESTING' as any],

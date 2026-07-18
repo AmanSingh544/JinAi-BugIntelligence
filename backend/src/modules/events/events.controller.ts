@@ -1,4 +1,11 @@
-import { Controller, ForbiddenException, Get, Query, Req, Res } from '@nestjs/common';
+import {
+  Controller,
+  ForbiddenException,
+  Get,
+  Query,
+  Req,
+  Res,
+} from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { EventsSseService } from './events-sse.service';
 import { ConfigService } from '@nestjs/config';
@@ -35,12 +42,11 @@ export class EventsController {
       throw new ForbiddenException('Invalid token');
     }
 
-    const member = await this.prisma.tenantMember.findFirst({
+    const members = await this.prisma.tenantMember.findMany({
       where: { user_id: userId },
       select: { tenant_id: true },
-      orderBy: { created_at: 'asc' },
     });
-    const tenantId = member?.tenant_id ?? '';
+    const tenantIds = members.map((m) => m.tenant_id);
 
     const clientId = randomUUID();
 
@@ -54,7 +60,7 @@ export class EventsController {
     this.sse.subscribe({
       id: clientId,
       userId,
-      tenantId,
+      tenantIds,
       response: res,
     });
 

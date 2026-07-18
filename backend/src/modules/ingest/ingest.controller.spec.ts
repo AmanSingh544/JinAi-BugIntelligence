@@ -3,6 +3,7 @@ import { IngestController } from './ingest.controller';
 import { IngestQueue } from './ingest.queue';
 import { IngestRateLimitService } from '../../shared/rate-limit/ingest-rate-limit.service';
 import { ApiKeyGuard, API_KEY_PROJECT } from '../../shared/guards/api-key.guard';
+import { EventType } from '../../shared/types/event-type.enum';
 
 const mockQueue = () => ({
   add: jest.fn().mockResolvedValue(undefined),
@@ -87,7 +88,7 @@ describe('IngestController', () => {
     const largePayload = 'x'.repeat(600_000);
     const dto = {
       sessionId: 's1',
-      events: [{ id: 'e1', sessionId: 's1', timestamp: 1, type: 'click', url: 'http://x', payload: { data: largePayload } }],
+      events: [{ id: 'e1', sessionId: 's1', timestamp: 1, type: EventType.CLICK, url: 'http://x', payload: { data: largePayload } }],
     };
 
     const result = await controller.batch(createReq(), undefined, dto);

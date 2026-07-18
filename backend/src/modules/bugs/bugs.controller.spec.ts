@@ -1,5 +1,5 @@
 import { Test } from '@nestjs/testing';
-import { ForbiddenException } from '@nestjs/common';
+import { ConflictException, ForbiddenException } from '@nestjs/common';
 import { BugsController } from './bugs.controller';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { AuthorizationService } from '../auth/authorization.service';
@@ -8,6 +8,7 @@ import { EventsSseService } from '../events/events-sse.service';
 import { ArchiveQueue } from './archive.queue';
 import { FixGenerationQueue } from '../autofix/fix-generation.queue';
 import { GitHubAppService } from '../autofix/github-app.service';
+import { DispatchQueue } from '../integrations/dispatch.queue';
 import { JwtAuthGuard } from '../../shared/guards/jwt-auth.guard';
 import { TenantAuthGuard } from '../auth/tenant-auth.guard';
 
@@ -59,6 +60,10 @@ const mockGitHubAppService = () => ({
   apiRequest: jest.fn().mockResolvedValue({ ok: true, status: 200, text: async () => '' }),
 });
 
+const mockDispatchQueue = () => ({
+  add: jest.fn().mockResolvedValue({ id: 'job-3' }),
+});
+
 describe('BugsController', () => {
   let controller: BugsController;
   let prisma: ReturnType<typeof mockPrisma>;
@@ -79,6 +84,7 @@ describe('BugsController', () => {
         { provide: ArchiveQueue, useFactory: mockArchiveQueue },
         { provide: FixGenerationQueue, useFactory: mockFixGenerationQueue },
         { provide: GitHubAppService, useFactory: mockGitHubAppService },
+        { provide: DispatchQueue, useFactory: mockDispatchQueue },
       ],
     })
       .overrideGuard(JwtAuthGuard).useValue({ canActivate: () => true })
@@ -190,6 +196,61 @@ describe('BugsController', () => {
       expect(result.assignee?.email).toBe('a@b.com');
       expect(result.regressionRelease?.version).toBe('v1');
       expect(result.cluster?.occurrenceCount).toBe(5);
+    });
+  });
+
+  describe('updateBug', () => {
+    it('updates text fields when user has permission and bug is not dispatched', async () => {
+      authz.canResolveBug.mockResolvedValue(true);
+      prisma.bug.findFirst.mockResolvedValue({ status: 'open', deliveries: [] });
+      prisma.bug.update.mockResolvedValue({ id: 'b1', summary: 'Edited summary' });
+
+      const result = await controller.updateBug(
+        'p1', 'b1',
+        { summary: 'Edited summary', rootCause: 'Real cause', stepsToReproduce: ['step 1'] },
+        'u1', { tenantId: 't1' } as any,
+      );
+
+      expect(result.summary).toBe('Edited summary');
+      expect(prisma.bug.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            summary: 'Edited summary',
+            root_cause: 'Real cause',
+            steps_to_reproduce: ['step 1'],
+          }),
+        }),
+      );
+      expect(audit.log).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'bug_updated' }),
+      );
+    });
+
+    it('rejects edits once the bug has been dispatched', async () => {
+      authz.canResolveBug.mockResolvedValue(true);
+      prisma.bug.findFirst.mockResolvedValue({ status: 'dispatched', deliveries: [] });
+
+      await expect(
+        controller.updateBug('p1', 'b1', { summary: 'x' }, 'u1', { tenantId: 't1' } as any),
+      ).rejects.toThrow(ConflictException);
+      expect(prisma.bug.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects edits when a successful delivery exists even if status moved on', async () => {
+      authz.canResolveBug.mockResolvedValue(true);
+      prisma.bug.findFirst.mockResolvedValue({ status: 'resolved', deliveries: [{ id: 'd1' }] });
+
+      await expect(
+        controller.updateBug('p1', 'b1', { summary: 'x' }, 'u1', { tenantId: 't1' } as any),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('throws ForbiddenException when user lacks permission', async () => {
+      authz.canResolveBug.mockResolvedValue(false);
+
+      await expect(
+        controller.updateBug('p1', 'b1', { summary: 'x' }, 'u1', { tenantId: 't1' } as any),
+      ).rejects.toThrow(ForbiddenException);
     });
   });
 

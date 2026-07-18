@@ -9,7 +9,10 @@ export class UserNotificationsService {
     private readonly sse: EventsSseService,
   ) {}
 
-  async list(userId: string, opts: { unreadOnly?: boolean; limit?: number; offset?: number } = {}) {
+  async list(
+    userId: string,
+    opts: { unreadOnly?: boolean; limit?: number; offset?: number } = {},
+  ) {
     const { unreadOnly = false, limit = 50, offset = 0 } = opts;
     const where = {
       user_id: userId,
@@ -22,10 +25,15 @@ export class UserNotificationsService {
         orderBy: { created_at: 'desc' },
         take: limit,
         skip: offset,
-        include: { project: { select: { id: true, name: true } }, bug: { select: { id: true, summary: true } } },
+        include: {
+          project: { select: { id: true, name: true } },
+          bug: { select: { id: true, summary: true } },
+        },
       }),
       this.prisma.userNotification.count({ where: { user_id: userId } }),
-      this.prisma.userNotification.count({ where: { user_id: userId, read_at: null } }),
+      this.prisma.userNotification.count({
+        where: { user_id: userId, read_at: null },
+      }),
     ]);
 
     return { items, total, unreadCount };
@@ -72,8 +80,11 @@ export class UserNotificationsService {
       },
     });
     this.sse.broadcast(
-      { event: 'notification:new', data: { userId: data.userId, notificationId: notification.id } },
-      (client) => client.userId === data.userId,
+      {
+        event: 'notification:new',
+        data: { userId: data.userId, notificationId: notification.id },
+      },
+      { userId: data.userId },
     );
     return notification;
   }

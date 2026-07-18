@@ -1,8 +1,12 @@
 # Master Execution Plan — Bug Intelligence Platform
 
-> **Status:** In Progress  
+> **Status:** Substantially complete (verified against code 2026-07-18)  
 > **Started:** 2026-05-15  
 > **Approach:** Execute in strict priority order. Track progress in this file.
+>
+> **Note:** The Autonomous Bug-Fix Agent (see `AUTOFIX_ARCHITECTURE.md`) was added after this
+> plan was written and is implemented through its Phase 3 (fix generation → PR → webhook/poll
+> merge). Its Phase 4 hardening (validation sandbox) is still open.
 
 ---
 
@@ -148,16 +152,16 @@ Instrument key actions with audit events.
 
 | Phase | Item | Status | Started | Completed | Notes |
 |-------|------|--------|---------|-----------|-------|
-| P0 | RBAC Enforcement | 🔲 Not started | — | — | |
-| P0 | Idempotency Lock | 🔲 Not started | — | — | |
-| P1 | Pagination | 🔲 Not started | — | — | |
-| P1 | Analytics/Charts | 🔲 Not started | — | — | |
-| P1 | Audit Wiring | 🔲 Not started | — | — | |
-| P2 | Regression Detection | 🔲 Not started | — | — | |
-| P2 | Real-Time Updates | 🔲 Not started | — | — | |
-| P2 | Fingerprint Metrics | 🔲 Not started | — | — | |
-| P3 | Test Coverage | 🔲 Not started | — | — | |
-| P3 | DLQ Management UI | 🔲 Not started | — | — | |
-| P3 | Async Embedding Queue | 🔲 Not started | — | — | |
-| P4 | Search, Profiles, Bulk Ops | 🔲 Not started | — | — | |
-| P5 | Cold Storage | 🔲 Not started | — | — | |
+| P0 | RBAC Enforcement | ✅ Done | 2026-05-15 | 2026-05-20 | Guards on all controllers incl. DLQ (`projects/:projectId/dlq`) and replay |
+| P0 | Idempotency Lock | ✅ Done | 2026-05-15 | 2026-05-20 | Redis `acquireLock`/`releaseLock` in `dispatch.worker.ts` |
+| P1 | Pagination | ✅ Done | 2026-05-17 | 2026-05-20 | Shared `pagination.dto` + dashboard `Pagination` component |
+| P1 | Analytics/Charts | ✅ Done | 2026-05-17 | 2026-05-20 | `dashboard` module + `OverviewPage` |
+| P1 | Audit Wiring | ✅ Done | 2026-05-17 | 2026-05-20 | `AuditService` in bugs/rules/integrations/tenants/environments + `ActivityFeedPage` |
+| P2 | Regression Detection | ✅ Done | 2026-05-17 | 2026-05-20 | In `ai-analysis.worker.ts` + dashboard filter |
+| P2 | Real-Time Updates | ✅ Done | 2026-05-18 | 2026-05-20 | SSE (`events` module + `useEventSource` hook) |
+| P2 | Fingerprint Metrics | 🔲 Not started | — | — | No fingerprint-stability / duplicate-bug-rate metrics in code |
+| P3 | Test Coverage | 🟡 Partial | 2026-05-18 | — | 21 backend spec files + 4 dashboard tests; still thin for codebase size |
+| P3 | DLQ Management UI | ✅ Done | 2026-05-18 | 2026-05-20 | Real guarded list/retry endpoints |
+| P3 | Async Embedding Queue | ✅ Done | 2026-05-18 | 2026-05-20 | Standalone `embedding.worker.ts` |
+| P4 | Search, Profiles, Bulk Ops | ✅ Done | 2026-05-18 | 2026-05-20 | Bug search, bulk-status, forgot/reset password, email verify, onboarding |
+| P5 | Cold Storage | 🟡 Partial | — | — | Soft archive (`archived_at` + archive worker) only; no partitioning/S3 (deferred until volume demands) |

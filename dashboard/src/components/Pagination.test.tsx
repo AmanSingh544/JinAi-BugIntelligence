@@ -20,17 +20,17 @@ describe('Pagination', () => {
   it('calls onPageChange when clicking next', () => {
     const onChange = vi.fn();
     render(<Pagination page={1} limit={20} total={100} onPageChange={onChange} />);
-    fireEvent.click(screen.getByText('Next →'));
+    fireEvent.click(screen.getByLabelText('Next page'));
     expect(onChange).toHaveBeenCalledWith(2);
   });
 
   it('disables prev on first page', () => {
     render(<Pagination page={1} limit={20} total={100} onPageChange={() => {}} />);
-    expect(screen.getByText('← Prev')).toBeDisabled();
+    expect(screen.getByLabelText('Previous page')).toBeDisabled();
   });
 
   it('disables next on last page', () => {
     render(<Pagination page={5} limit={20} total={100} onPageChange={() => {}} />);
-    expect(screen.getByText('Next →')).toBeDisabled();
+    expect(screen.getByLabelText('Next page')).toBeDisabled();
   });
 });

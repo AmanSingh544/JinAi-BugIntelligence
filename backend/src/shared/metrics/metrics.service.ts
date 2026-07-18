@@ -1,5 +1,16 @@
-import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
-import { Registry, Counter, Histogram, Gauge, collectDefaultMetrics } from 'prom-client';
+import {
+  Injectable,
+  Logger,
+  OnModuleInit,
+  OnModuleDestroy,
+} from '@nestjs/common';
+import {
+  Registry,
+  Counter,
+  Histogram,
+  Gauge,
+  collectDefaultMetrics,
+} from 'prom-client';
 import { Queue } from 'bullmq';
 
 @Injectable()
@@ -62,6 +73,21 @@ export class MetricsService implements OnModuleInit, OnModuleDestroy {
     registers: [this.registry],
   });
 
+  // Fingerprinting / clustering stability
+  readonly fingerprintEventsTotal = new Counter({
+    name: 'fingerprint_events_total',
+    help: 'Errors reaching detection, by whether the fingerprint matched an existing one in the dedup bucket',
+    labelNames: ['result'], // 'new' | 'deduped'
+    registers: [this.registry],
+  });
+
+  readonly clusterAssignmentsTotal = new Counter({
+    name: 'cluster_assignments_total',
+    help: 'Cluster assignments during AI analysis, by whether an existing cluster was reused',
+    labelNames: ['result'], // 'existing' | 'new'
+    registers: [this.registry],
+  });
+
   // AI
   readonly aiLlmCallsTotal = new Counter({
     name: 'ai_llm_calls_total',
@@ -86,7 +112,10 @@ export class MetricsService implements OnModuleInit, OnModuleDestroy {
     this.logger.log('Default metrics enabled');
 
     // Start interval-based queue depth updater (every 15s)
-    this.queueDepthInterval = setInterval(() => this.updateQueueDepths(), 15000);
+    this.queueDepthInterval = setInterval(
+      () => void this.updateQueueDepths(),
+      15000,
+    );
   }
 
   onModuleDestroy() {
@@ -114,7 +143,9 @@ export class MetricsService implements OnModuleInit, OnModuleDestroy {
         this.bullmqQueueDepth.set({ queue: name, state: 'delayed' }, delayed);
         this.bullmqQueueDepth.set({ queue: name, state: 'failed' }, failed);
       } catch (err) {
-        this.logger.warn(`Failed to update queue depth for ${queue.name}: ${(err as Error).message}`);
+        this.logger.warn(
+          `Failed to update queue depth for ${queue.name}: ${(err as Error).message}`,
+        );
       }
     }
   }

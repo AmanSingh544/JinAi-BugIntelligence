@@ -1,10 +1,26 @@
-import { Body, Controller, Get, NotFoundException, Param, Post, Query, UseGuards } from '@nestjs/common';
-import { PaginationDto, PaginatedResult } from '../../shared/dto/pagination.dto';
+import {
+  Body,
+  Controller,
+  Get,
+  NotFoundException,
+  Param,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
+import {
+  PaginationDto,
+  PaginatedResult,
+} from '../../shared/dto/pagination.dto';
 import { ApiBearerAuth, ApiSecurity, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../shared/guards/jwt-auth.guard';
 import { TenantAuthGuard } from '../auth/tenant-auth.guard';
-import { ApiKeyGuard, API_KEY_PROJECT } from '../../shared/guards/api-key.guard';
+import {
+  ApiKeyGuard,
+  API_KEY_PROJECT,
+} from '../../shared/guards/api-key.guard';
 import { PrismaService } from '../../shared/prisma/prisma.service';
+import type { Prisma } from '@prisma/client';
 import type { Request } from 'express';
 import { Req } from '@nestjs/common';
 
@@ -35,7 +51,10 @@ export class SessionsController {
   }
 
   @Get(':sessionId/replay')
-  async getReplay(@Param('projectId') projectId: string, @Param('sessionId') sessionId: string) {
+  async getReplay(
+    @Param('projectId') projectId: string,
+    @Param('sessionId') sessionId: string,
+  ) {
     const session = await this.prisma.session.findFirst({
       where: { id: sessionId, project_id: projectId },
     });
@@ -45,7 +64,7 @@ export class SessionsController {
 
     const segments = await this.prisma.replaySegment.findMany({
       where: { session_id: sessionId, project_id: projectId },
-      orderBy: { sequence: 'asc' },
+      orderBy: [{ sequence: 'asc' }, { created_at: 'asc' }],
     });
 
     const allEvents = segments.flatMap((s) => s.events as unknown[]);
@@ -193,7 +212,7 @@ export class ReplayController {
         session_id: sessionId,
         project_id: project.id,
         sequence: body.sequence,
-        events: body.events as object,
+        events: body.events as Prisma.InputJsonValue,
       },
     });
 
