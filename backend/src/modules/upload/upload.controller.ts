@@ -14,15 +14,15 @@ import { extname } from 'path';
 import { mkdirSync } from 'fs';
 import { ApiKeyGuard, API_KEY_PROJECT } from '../../shared/guards/api-key.guard';
 import { PrismaService } from '../../shared/prisma/prisma.service';
-import { TenantAuthGuard } from '../auth/tenant-auth.guard';
-import { CurrentTenant } from '../../shared/tenant/current-tenant.decorator';
-import type { TenantContext } from '../../shared/tenant/tenant-context';
 
 const UPLOAD_DIR = './uploads/screenshots';
 
+// ApiKeyGuard only — this endpoint is called by the extension, which has no
+// JWT user, so TenantAuthGuard (which requires one) would 403 every upload.
+// The API key already scopes the request to exactly one project.
 @ApiTags('upload')
 @ApiSecurity('api-key')
-@UseGuards(ApiKeyGuard, TenantAuthGuard)
+@UseGuards(ApiKeyGuard)
 @Controller('upload')
 export class UploadController {
   constructor(private readonly prisma: PrismaService) {
@@ -57,16 +57,25 @@ export class UploadController {
 
     const url = `/uploads/screenshots/${file.filename}`;
 
-    // Link to latest error in session
     if (sessionId) {
+      // The upload usually arrives BEFORE the error batch is ingested (the
+      // extension uploads immediately; events flush on a 5s timer), so the
+      // screenshot is stored on the session — the AI worker copies it onto
+      // the bug at creation time. The session may not exist yet either.
+      await this.prisma.session.upsert({
+        where: { id: sessionId },
+        create: { id: sessionId, project_id: project.id, screenshot_url: url },
+        update: { screenshot_url: url },
+      });
+
+      // Also link directly in case the bug already exists (repeat error).
       const latestError = await this.prisma.error.findFirst({
         where: { session_id: sessionId },
         orderBy: { created_at: 'desc' },
       });
-
       if (latestError) {
         await this.prisma.bug.updateMany({
-          where: { error_id: latestError.id },
+          where: { error_id: latestError.id, screenshot_url: null },
           data: { screenshot_url: url },
         });
       }

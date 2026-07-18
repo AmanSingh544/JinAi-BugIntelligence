@@ -8,18 +8,9 @@ import {
 } from '../shared/runtime-config';
 import { sanitizePayload } from '../shared/sanitize';
 
-// ── Offscreen document for screenshots ────────────────────────────────────────
-
-async function setupOffscreenDocument(path: string): Promise<void> {
-  // hasDocument survives SW restarts — a module-level flag does not, and
-  // createDocument throws if a document already exists from a previous SW life
-  if (await chrome.offscreen.hasDocument()) return;
-  await chrome.offscreen.createDocument({
-    url: chrome.runtime.getURL(path),
-    reasons: ['TESTING' as any],
-    justification: 'Capture visible tab screenshots from a service worker',
-  });
-}
+// ── Screenshot capture ────────────────────────────────────────────────────────
+// captureVisibleTab runs directly in the MV3 service worker — offscreen
+// documents don't get the tabs API, so routing through one can never work.
 
 async function captureScreenshot(sessionId: string, expectedTabId?: number): Promise<void> {
   const cfg = getRuntimeConfig();
@@ -38,11 +29,7 @@ async function captureScreenshot(sessionId: string, expectedTabId?: number): Pro
   }
 
   try {
-    await setupOffscreenDocument('offscreen.html');
-    const dataUrl = await chrome.runtime.sendMessage({
-      type: 'capture-screenshot',
-      tabId: expectedTabId,
-    });
+    const dataUrl = await chrome.tabs.captureVisibleTab({ format: 'jpeg', quality: 70 });
     if (!dataUrl || typeof dataUrl !== 'string') return;
 
     const res = await fetch(dataUrl);
@@ -65,13 +52,19 @@ async function captureScreenshot(sessionId: string, expectedTabId?: number): Pro
     const storage = await chrome.storage.local.get(['apiKey', 'ingestUrl']);
     const uploadUrl = (storage.ingestUrl ?? 'http://localhost:4000/api/v1/ingest/batch').replace('/ingest/batch', '/upload/screenshot');
 
-    await fetch(uploadUrl, {
+    const uploadRes = await fetch(uploadUrl, {
       method: 'POST',
       headers: { 'X-API-Key': storage.apiKey },
       body: formData,
     });
-  } catch {
-    // Best-effort: silently drop screenshot failures
+    if (!uploadRes.ok) {
+      console.warn('[BugIntel] Screenshot upload failed:', uploadRes.status);
+    } else {
+      console.log('[BugIntel] Screenshot uploaded for session', sessionId);
+    }
+  } catch (err) {
+    // Best-effort — but never silently: an invisible failure here cost us dearly
+    console.warn('[BugIntel] Screenshot capture failed:', (err as Error).message);
   }
 }
 

@@ -474,6 +474,8 @@ interface RawBugDetail extends RawBug {
   steps_to_reproduce: string[];
   fix_suggestion: string;
   ai_model_version: string;
+  ai_confidence?: number | null;
+  screenshot_url?: string | null;
   fix_status?: string | null;
   error: { message: string; stack?: string };
   cluster?: { id: string; occurrenceCount: number };
@@ -545,6 +547,10 @@ function mapBug(r: RawBug): Bug {
   };
 }
 
+// Uploaded files live on the backend origin, not the dashboard's — a relative
+// /uploads/... URL would resolve against localhost:5173 and 404.
+const FILE_BASE = BASE.replace(/\/api\/v1$/, '');
+
 function mapBugDetail(r: RawBugDetail): BugDetail {
   return {
     ...mapBug(r),
@@ -552,6 +558,8 @@ function mapBugDetail(r: RawBugDetail): BugDetail {
     stepsToReproduce: r.steps_to_reproduce ?? [],
     fixSuggestion: r.fix_suggestion,
     aiModelVersion: r.ai_model_version,
+    aiConfidence: r.ai_confidence ?? undefined,
+    screenshotUrl: r.screenshot_url ? `${FILE_BASE}${r.screenshot_url}` : undefined,
     fixStatus: r.fix_status,
     error: r.error,
     cluster: r.cluster,

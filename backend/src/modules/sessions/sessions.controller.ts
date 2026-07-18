@@ -201,11 +201,22 @@ export class ReplayController {
   ) {
     const project = req[API_KEY_PROJECT] as { id: string };
 
-    // Hard limit: reject segments > 500KB
+    // Hard limit: reject oversized segments. Full DOM snapshots of rich SPAs
+    // run well past 500KB, so the cap matches the 5MB body-parser limit's
+    // practical headroom.
+    const MAX_SEGMENT_BYTES = 2 * 1024 * 1024;
     const payloadSize = Buffer.byteLength(JSON.stringify(body.events));
-    if (payloadSize > 500 * 1024) {
-      return { error: 'Segment too large', maxBytes: 500 * 1024 };
+    if (payloadSize > MAX_SEGMENT_BYTES) {
+      return { error: 'Segment too large', maxBytes: MAX_SEGMENT_BYTES };
     }
+
+    // Replay flush can legitimately arrive before the first event batch has
+    // created the session row — upsert so the segment never FK-fails.
+    await this.prisma.session.upsert({
+      where: { id: sessionId },
+      create: { id: sessionId, project_id: project.id },
+      update: {},
+    });
 
     await this.prisma.replaySegment.create({
       data: {

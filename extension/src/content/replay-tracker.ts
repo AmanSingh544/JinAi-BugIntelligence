@@ -1,10 +1,14 @@
 import { record } from 'rrweb';
 import { sendEvent, getSessionId } from './shared';
 
-const MAX_BUFFER_SIZE = 200;
 const POST_ERROR_RECORD_MS = 5000;
+// rrweb re-takes a full snapshot every N events ("checkout"). We keep the
+// last complete chunk plus the current one, so the buffer ALWAYS starts with
+// a Meta + FullSnapshot pair. A naive ring buffer slices the snapshot off on
+// busy pages and the replay renders as a blank page with a floating cursor.
+const CHECKOUT_EVERY_NTH = 150;
 
-let buffer: unknown[] = [];
+let chunks: unknown[][] = [];
 let recording = false;
 let stopFn: (() => void) | null = null;
 let _replayEnabled = false;
@@ -19,16 +23,19 @@ export function startReplayRecording() {
   if (!_replayEnabled) return;
 
   recording = true;
-  buffer = [];
+  chunks = [];
 
   stopFn = record({
     maskAllInputs: true,
     maskTextSelector: '*[data-bi-mask]',
-    emit(event) {
-      buffer.push(event);
-      if (buffer.length > MAX_BUFFER_SIZE) {
-        buffer = buffer.slice(buffer.length - MAX_BUFFER_SIZE);
+    checkoutEveryNth: CHECKOUT_EVERY_NTH,
+    emit(event, isCheckout) {
+      if (isCheckout || chunks.length === 0) {
+        chunks.push([]);
+        if (chunks.length > 2) chunks.shift();
       }
+      const current = chunks[chunks.length - 1];
+      if (current) current.push(event);
     },
   }) ?? null;
 }
@@ -44,14 +51,14 @@ export function stopReplayRecording() {
 export function flushReplayBuffer(includeExtra = false) {
   if (!_replayEnabled) return;
 
-  const events = [...buffer];
-  buffer = [];
+  const events = chunks.flat();
+  chunks = [];
 
   if (includeExtra) {
     // Continue recording for 5 more seconds after error
     setTimeout(() => {
-      const extraEvents = [...buffer];
-      buffer = [];
+      const extraEvents = chunks.flat();
+      chunks = [];
       if (extraEvents.length > 0) {
         sendReplayEvents([...events, ...extraEvents]);
       } else if (events.length > 0) {

@@ -9,6 +9,13 @@ export function generateId(): string {
 
 let _sessionId: string | null = null;
 
+// Each content-script file is bundled separately, so every tracker gets its
+// own copy of this module. The session ID must live on `window` (all trackers
+// share the MAIN world) or each tracker mints its own — events then scatter
+// across phantom sessions and replay uploads FK-fail against a session that
+// ingest never created.
+const SESSION_KEY = '__BI_SESSION_ID__';
+
 function getReleaseTag(): string | undefined {
   const htmlRelease = document?.documentElement?.getAttribute('data-bi-release');
   if (htmlRelease) return htmlRelease;
@@ -21,7 +28,16 @@ function getReleaseTag(): string | undefined {
 
 export function getSessionId(): string {
   if (_sessionId) return _sessionId;
+
+  const win = window as unknown as Record<string, unknown>;
+  const shared = win[SESSION_KEY];
+  if (typeof shared === 'string') {
+    _sessionId = shared;
+    return _sessionId;
+  }
+
   _sessionId = crypto.randomUUID();
+  win[SESSION_KEY] = _sessionId;
   postToBackground({ type: 'SESSION_INIT', sessionId: _sessionId, release: getReleaseTag() });
   return _sessionId;
 }

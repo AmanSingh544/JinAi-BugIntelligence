@@ -246,6 +246,9 @@ export class AiAnalysisWorker implements OnModuleInit, OnModuleDestroy {
             fix_suggestion: result.fixSuggestion,
             severity: result.severity,
             status: 'open',
+            // Screenshot arrives at error time, before this bug exists — the
+            // upload endpoint parks it on the session for us to pick up here.
+            screenshot_url: error.session?.screenshot_url ?? null,
             ai_confidence: result.confidence ?? null,
             ai_model_version: modelVersion,
             ai_raw_output: result as unknown as Prisma.JsonObject,

@@ -18,6 +18,15 @@ async function bootstrap() {
   app.use(compression());
   app.use(cookieParser());
 
+  // Serve uploaded screenshots. CORP header must override helmet's
+  // same-origin default so the dashboard (different origin) can embed them.
+  app.use(
+    '/uploads',
+    express.static('uploads', {
+      setHeaders: (res) => res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin'),
+    }),
+  );
+
   app.enableCors({
     origin: process.env.ALLOWED_ORIGINS?.split(',') ?? ['http://localhost:5173'],
     credentials: true,

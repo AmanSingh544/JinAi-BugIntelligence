@@ -113,6 +113,7 @@ model Session {
   user_agent     String?
   initial_url    String?
   metadata       Json?
+  screenshot_url String?
 
   project     Project              @relation(fields: [project_id], references: [id], onDelete: Cascade)
   environment ProjectEnvironment?  @relation(fields: [environment_id], references: [id], onDelete: SetNull)
