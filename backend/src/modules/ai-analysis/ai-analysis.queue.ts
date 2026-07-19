@@ -25,8 +25,10 @@ export class AiAnalysisQueue {
     this.queue = new Queue<AiAnalysisJob>(AI_ANALYSIS_QUEUE, {
       connection: redis,
       defaultJobOptions: {
-        attempts: 3,
-        backoff: { type: 'exponential', delay: 5000 },
+        // 4 attempts at 15s/30s/60s spacing — wide enough to ride out a
+        // provider rate-limit window instead of failing inside it
+        attempts: 4,
+        backoff: { type: 'exponential', delay: 15000 },
         removeOnComplete: 200,
         removeOnFail: 500,
       },

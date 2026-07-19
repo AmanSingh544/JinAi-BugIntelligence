@@ -1,0 +1,27 @@
+{$DOMAIN} {
+	encode zstd gzip
+
+	# Prometheus metrics stay private to the VM — scrape locally, not publicly
+	handle /api/v1/metrics {
+		respond "" 403
+	}
+
+	# Backend API — flush_interval -1 keeps SSE (/api/v1/events/stream) live
+	handle /api/* {
+		reverse_proxy backend:4000 {
+			flush_interval -1
+		}
+	}
+
+	# Uploaded screenshots (served by the backend's static handler)
+	handle /uploads/* {
+		reverse_proxy backend:4000
+	}
+
+	# Dashboard SPA
+	handle {
+		root * /srv/dashboard
+		try_files {path} /index.html
+		file_server
+	}
+}

@@ -1,0 +1,76 @@
+# Production stack.
+#
+#   Plan A (everything on one VM, local Postgres):
+#     COMPOSE_PROFILES=with-db docker compose -f docker-compose.prod.yml --env-file .env.production up -d
+#
+#   Plan B (database on Neon — leave the with-db profile off):
+#     docker compose -f docker-compose.prod.yml --env-file .env.production up -d
+#
+# Caddy terminates TLS for $DOMAIN, serves the dashboard build from
+# ./dashboard/dist, and proxies /api/* and /uploads/* to the backend.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    profiles: ['with-db']
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env.production}
+      POSTGRES_DB: bug_intelligence
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d bug_intelligence']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ['redis-server', '--appendonly', 'yes']
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env.production
+    environment:
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      # Screenshots must survive container replacement
+      - ./data/uploads:/app/uploads
+    expose:
+      - '4000'
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    environment:
+      DOMAIN: ${DOMAIN:?set in .env.production}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./dashboard/dist:/srv/dashboard:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - backend
+
+volumes:
+  pg_data:
+  redis_data:
+  caddy_data:
+  caddy_config:

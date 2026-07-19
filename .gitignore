@@ -19,3 +19,8 @@
 
 # Packages
 /packages/sourcemap-upload/node_modules
+
+# Production (server-local, never committed)
+.env.production
+/data/
+/backups/

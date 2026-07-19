@@ -27,6 +27,14 @@ const AI_CACHE_TTL = 86400;
 const AI_LOCK_TTL = 120;
 const CLUSTER_LOCK_TTL = 120;
 
+/** Every model in the chain failed with a retryable error (429/5xx/network). */
+class AiTransientFailureError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AiTransientFailureError';
+  }
+}
+
 interface AiAnalysisResult {
   summary: string;
   rootCause: string;
@@ -208,12 +216,38 @@ export class AiAnalysisWorker implements OnModuleInit, OnModuleDestroy {
             result = polled;
             modelVersion = 'cached';
           } else {
-            const llmResult = await this.runLlmAnalysis(
-              error,
-              sessionId,
-              projectId,
-              fingerprint,
-            );
+            let llmResult;
+            try {
+              llmResult = await this.runLlmAnalysis(
+                error,
+                sessionId,
+                projectId,
+                fingerprint,
+              );
+            } catch (err) {
+              if (err instanceof AiTransientFailureError) {
+                await this.redis.del(aiLockKey);
+                const maxAttempts = job.opts.attempts ?? 1;
+                if (job.attemptsMade + 1 < maxAttempts) {
+                  // Rethrow → BullMQ retries with backoff. Safe: the error is
+                  // already linked to its cluster, so retries can't mint ghosts.
+                  this.logger.warn(
+                    `AI providers transiently unavailable — retrying (attempt ${job.attemptsMade + 1}/${maxAttempts}): ${err.message}`,
+                  );
+                  throw err;
+                }
+                this.logger.error(
+                  `AI providers still unavailable on final attempt — recording ai_failed: ${err.message}`,
+                );
+                await this.createFailedBug(projectId, sessionId, errorId, clusterId);
+                await this.tracker.recordLatency(
+                  'ai_analysis',
+                  Date.now() - start,
+                );
+                return;
+              }
+              throw err;
+            }
             if (!llmResult) {
               await this.redis.del(aiLockKey);
               await this.createFailedBug(projectId, sessionId, errorId, clusterId);
@@ -486,6 +520,7 @@ export class AiAnalysisWorker implements OnModuleInit, OnModuleDestroy {
     systemPrompt: string,
     userMessage: string,
   ): Promise<{ text: string; model: string } | { text: null; model: null }> {
+    const failureStatuses: number[] = [];
     for (const model of this.models) {
       try {
         const response = await this.ai.chat.completions.create({
@@ -501,11 +536,25 @@ export class AiAnalysisWorker implements OnModuleInit, OnModuleDestroy {
         return { text, model };
       } catch (err) {
         const e = err as Error & { status?: number; error?: unknown };
+        failureStatuses.push(e.status ?? 0);
         this.logger.warn(
           `Model ${model} failed [${e.status ?? '?'}]: ${e.message} | ${JSON.stringify(e.error ?? '')} — trying next`,
         );
       }
     }
+
+    // If every model failed transiently (rate limit, 5xx, network), the same
+    // request will likely succeed in a minute — surface that so the job can
+    // be retried with backoff instead of permanently recording ai_failed.
+    const allTransient =
+      failureStatuses.length > 0 &&
+      failureStatuses.every((s) => s === 429 || s >= 500 || s === 0);
+    if (allTransient) {
+      throw new AiTransientFailureError(
+        `All ${failureStatuses.length} model(s) failed transiently (statuses: ${failureStatuses.join(', ')})`,
+      );
+    }
+
     return { text: null, model: null };
   }
 
